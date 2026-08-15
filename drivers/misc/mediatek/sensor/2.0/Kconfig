@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config MOTO_ALGO_PARAMS
+	bool "algo params for moto sensor algo"
+	default n
+	help
+	  This feature Option is used for open/close moto sensor algo parms.
+
+config MOTO_CHOPCHOP_PARAMS
+	bool "algo params for moto chopchop algo"
+	default n
+	help
+	  This feature Option is used for open/close moto chopchop algo parms.
+
+config MOTO_CAMGEST_PARAMS
+	bool "algo params for moto camgest algo"
+	default n
+	help
+	  This feature Option is used for open/close moto camgest algo parms.
+
+config MOTO_GLANCE_PARAMS
+	bool "algo params for moto glance algo"
+	default n
+	help
+	  This feature Option is used for open/close moto glance algo parms.
+
+config MOTO_LTV_PARAMS
+	bool "algo params for moto ltv algo"
+	default n
+	help
+	  This feature Option is used for open/close moto ltv algo parms.
+
+config MOTO_ALSPS_PARAMS
+	bool "algo params for moto alsps algo"
+	default n
+	help
+	  This feature Option is used for open/close moto alsps algo parms.
+
+config MOTO_ALSPS_NVCFG
+	bool "algo params for moto alsps nvcfg"
+	default n
+	help
+	  This feature Option is used for open/close moto alsps nvcfg parms.
+
+config MOTO_LIGHT_1_SENSOR
+	bool "alternate light sensor"
+	default n
+	help
+	  This feature Option is used for enable/disable moto alternate light sensor.
+
+config MOTO_TAP_PARAMS
+	bool "algo params for moto tap algo"
+	default n
+	help
+	  This feature Option is used for open/close moto tap algo parms.
+
+source "drivers/misc/mediatek/sensor/2.0/mtk_nanohub/Kconfig"
+source "drivers/misc/mediatek/sensor/2.0/sensorhub/Kconfig"
+source "drivers/misc/mediatek/sensor/2.0/test/Kconfig"
+source "drivers/misc/mediatek/sensor/2.0/lsm6dsm_secondary/Kconfig"

@@ -1,0 +1,535 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Mediatek Watchdog Driver
+ *
+ * Copyright (C) 2014 Matthias Brugger
+ *
+ * Matthias Brugger <matthias.bgg@gmail.com>
+ *
+ * Based on sunxi_wdt.c
+ */
+
+#include <dt-bindings/reset-controller/mt2712-resets.h>
+#include <dt-bindings/reset-controller/mt8183-resets.h>
+#include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/init.h>
+#include <linux/io.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
+#include <linux/platform_device.h>
+#include <linux/reboot.h>
+#include <linux/reset-controller.h>
+#include <linux/types.h>
+#include <linux/watchdog.h>
+
+#ifdef CONFIG_MTK_RTC
+#include <../misc/mediatek/include/mt-plat/mtk_rtc.h>
+#endif
+
+#define WDT_MAX_TIMEOUT		31
+#define WDT_MIN_TIMEOUT		1
+#define WDT_LENGTH_TIMEOUT(n)	((n) << 5)
+
+#define WDT_LENGTH		0x04
+#define WDT_LENGTH_KEY		0x8
+
+#define WDT_RST			0x08
+#define WDT_RST_RELOAD		0x1971
+
+#define WDT_MODE		0x00
+#define WDT_MODE_EN		(1 << 0)
+#define WDT_MODE_EXT_POL_LOW	(0 << 1)
+#define WDT_MODE_EXT_POL_HIGH	(1 << 1)
+#define WDT_MODE_EXRST_EN	(1 << 2)
+#define WDT_MODE_IRQ_EN		(1 << 3)
+#define WDT_MODE_AUTO_START	(1 << 4)
+#define WDT_MODE_DUAL_EN	(1 << 6)
+#define WDT_MODE_KEY		0x22000000
+
+#define WDT_STATUS		0x0c
+#define WDT_NONRST_REG		0x20
+#define WDT_NONRST_REG2		0x24
+
+#define WDT_REQ_MODE		0x30
+#define WDT_REQ_MODE_KEY	0x33000000
+#define WDT_REQ_IRQ_EN		0x34
+#define WDT_REQ_IRQ_KEY		0x44000000
+#define WDT_REQ_MODE_DEBUG_EN	0x80000
+
+#define WDT_SWRST		0x14
+#define WDT_SWRST_KEY		0x1209
+
+#define WDT_SWSYSRST		0x18U
+#define WDT_SWSYS_RST_KEY	0x88000000
+#define WDT_LATCH_CTL2		0x48
+#define WDT_DFD_EN		(1 << 17)
+#define WDT_DFD_THERMAL1_DIS	(1 << 18)
+#define WDT_DFD_THERMAL2_DIS	(1 << 19)
+#define WDT_DFD_TIMEOUT_MASK	0x1FFFF
+#define WDT_LATCH_CTL2_KEY	0x95000000
+
+#define DRV_NAME		"mtk-wdt"
+#define DRV_VERSION		"1.0"
+
+/*
+ * Diagnostic only: the TB132FU source-kernel port reaches Android userspace,
+ * but normal boot currently never starts the userspace watchdog feeder.  The
+ * bootloader leaves TOPRGU enabled, so that otherwise-live boot is reset after
+ * roughly 31 seconds.  Keep restart support intact while suppressing only the
+ * watchdog countdown, allowing ADB/live logging to expose the later failure.
+ */
+#define TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG 1
+
+static bool nowayout = WATCHDOG_NOWAYOUT;
+static unsigned int timeout;
+
+static int mtk_wdt_set_timeout(struct watchdog_device *wdt_dev,
+			       unsigned int timeout);
+static int mtk_wdt_start(struct watchdog_device *wdt_dev);
+static int mtk_wdt_stop(struct watchdog_device *wdt_dev);
+
+struct mtk_wdt_dev {
+	struct watchdog_device wdt_dev;
+	void __iomem *wdt_base;
+	spinlock_t lock; /* protects WDT_SWSYSRST reg */
+	struct reset_controller_dev rcdev;
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	struct timer_list tb132fu_diagnostic_timer;
+#endif
+};
+
+struct mtk_wdt_data {
+	int toprgu_sw_rst_num;
+};
+
+static const struct mtk_wdt_data mt2712_data = {
+	.toprgu_sw_rst_num = MT2712_TOPRGU_SW_RST_NUM,
+};
+
+static const struct mtk_wdt_data mt8183_data = {
+	.toprgu_sw_rst_num = MT8183_TOPRGU_SW_RST_NUM,
+};
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+static void tb132fu_diagnostic_disable_watchdog(struct timer_list *timer)
+{
+	struct mtk_wdt_dev *mtk_wdt = from_timer(mtk_wdt, timer,
+						 tb132fu_diagnostic_timer);
+	u32 reg;
+
+	/* Defeat direct TOPRGU rearming paths that bypass watchdog_ops. */
+	reg = readl(mtk_wdt->wdt_base + WDT_MODE);
+	reg &= ~WDT_MODE_EN;
+	reg |= WDT_MODE_KEY;
+	iowrite32(reg, mtk_wdt->wdt_base + WDT_MODE);
+	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
+}
+#endif
+
+static int toprgu_reset_update(struct reset_controller_dev *rcdev,
+			       unsigned long id, bool assert)
+{
+	unsigned int tmp;
+	unsigned long flags;
+	struct mtk_wdt_dev *data =
+		 container_of(rcdev, struct mtk_wdt_dev, rcdev);
+
+	spin_lock_irqsave(&data->lock, flags);
+
+	tmp = readl(data->wdt_base + WDT_SWSYSRST);
+	if (assert)
+		tmp |= BIT(id);
+	else
+		tmp &= ~BIT(id);
+	tmp |= WDT_SWSYS_RST_KEY;
+	writel(tmp, data->wdt_base + WDT_SWSYSRST);
+
+	spin_unlock_irqrestore(&data->lock, flags);
+
+	return 0;
+}
+
+static int toprgu_reset_assert(struct reset_controller_dev *rcdev,
+			       unsigned long id)
+{
+	return toprgu_reset_update(rcdev, id, true);
+}
+
+static int toprgu_reset_deassert(struct reset_controller_dev *rcdev,
+				 unsigned long id)
+{
+	return toprgu_reset_update(rcdev, id, false);
+}
+
+static int toprgu_reset(struct reset_controller_dev *rcdev,
+			unsigned long id)
+{
+	int ret;
+
+	ret = toprgu_reset_assert(rcdev, id);
+	if (ret)
+		return ret;
+
+	return toprgu_reset_deassert(rcdev, id);
+}
+
+static const struct reset_control_ops toprgu_reset_ops = {
+	.assert = toprgu_reset_assert,
+	.deassert = toprgu_reset_deassert,
+	.reset = toprgu_reset,
+};
+
+static int toprgu_register_reset_controller(struct platform_device *pdev,
+					    int rst_num)
+{
+	int ret;
+	struct mtk_wdt_dev *mtk_wdt = platform_get_drvdata(pdev);
+
+	spin_lock_init(&mtk_wdt->lock);
+
+	mtk_wdt->rcdev.owner = THIS_MODULE;
+	mtk_wdt->rcdev.nr_resets = rst_num;
+	mtk_wdt->rcdev.ops = &toprgu_reset_ops;
+	mtk_wdt->rcdev.of_node = pdev->dev.of_node;
+	ret = devm_reset_controller_register(&pdev->dev, &mtk_wdt->rcdev);
+	if (ret != 0)
+		pr_info("couldn't register wdt reset controller: %d\n", ret);
+	return ret;
+}
+
+static void mtk_wdt_parse_dt(struct device_node *np,
+				struct watchdog_device *wdt_dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base;
+	int ret = 0;
+	unsigned int reg = 0, tmp = 0, dfd_timeout = 0;
+
+	if (!np || !mtk_wdt)
+		return;
+
+	ret = of_property_read_u32(np, "mediatek,rg_dfd_timeout",
+					&dfd_timeout);
+
+	wdt_base = mtk_wdt->wdt_base;
+	if (wdt_base && !ret) {
+		tmp = dfd_timeout & WDT_DFD_TIMEOUT_MASK;
+
+		/* enable dfd_en and setup timeout */
+		reg = readl(wdt_base + WDT_LATCH_CTL2);
+		reg &= ~(WDT_DFD_THERMAL2_DIS | WDT_DFD_TIMEOUT_MASK);
+		reg |= (WDT_DFD_EN | WDT_DFD_THERMAL1_DIS |
+			WDT_LATCH_CTL2_KEY | tmp);
+		writel(reg, wdt_base + WDT_LATCH_CTL2);
+	}
+}
+
+static void mtk_wdt_init(struct device_node *np,
+			struct watchdog_device *wdt_dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base;
+
+	wdt_base = mtk_wdt->wdt_base;
+
+	/*
+	 * The TB132FU's Lenovo kernel does not apply the generic 4.19 DFD
+	 * programming during watchdog ownership handoff.  Keep LK's DFD setup
+	 * intact and follow Lenovo's TOPRGU sequence below instead.
+	 */
+
+	if (readl(wdt_base + WDT_MODE) & WDT_MODE_EN) {
+		set_bit(WDOG_HW_RUNNING, &wdt_dev->status);
+		mtk_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
+	}
+
+	/* Lenovo stops LK's inherited watchdog during kernel ownership handoff. */
+	mtk_wdt_stop(wdt_dev);
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	mtk_wdt_stop(wdt_dev);
+	pr_emerg("TB132FU: diagnostic build disabled the AP watchdog\n");
+#endif
+}
+
+static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
+			   unsigned long action, void *data)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base;
+	const char *cmd = data;
+	u32 reg;
+
+	wdt_base = mtk_wdt->wdt_base;
+
+	/* Preserve Lenovo/MediaTek's reset-reason and bypass-power-key flow. */
+	writel(readl(wdt_base + WDT_STATUS), wdt_base + WDT_NONRST_REG);
+	reg = readl(wdt_base + WDT_MODE);
+	reg &= ~(WDT_MODE_DUAL_EN | WDT_MODE_IRQ_EN | WDT_MODE_EN |
+		 WDT_MODE_AUTO_START);
+	reg |= WDT_MODE_KEY;
+	writel(reg, wdt_base + WDT_MODE);
+
+	if (cmd && !strcmp(cmd, "recovery")) {
+		writel(readl(wdt_base + WDT_NONRST_REG2) | BIT(1),
+		       wdt_base + WDT_NONRST_REG2);
+#ifdef CONFIG_MTK_RTC
+		rtc_mark_recovery();
+#endif
+	} else if (cmd && !strcmp(cmd, "bootloader")) {
+		writel(readl(wdt_base + WDT_NONRST_REG2) | BIT(2),
+		       wdt_base + WDT_NONRST_REG2);
+#ifdef CONFIG_MTK_RTC
+		rtc_mark_fast();
+#endif
+	} else if (cmd && !strcmp(cmd, "kpoc")) {
+#if defined(CONFIG_MTK_RTC) && defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING)
+		rtc_mark_kpoc();
+#endif
+	} else if (cmd && !strcmp(cmd, "enter_kpoc")) {
+#if defined(CONFIG_MTK_RTC) && defined(CONFIG_MTK_AUTO_POWER_ON_WITH_CHARGER)
+		rtc_mark_enter_kpoc();
+#endif
+	} else {
+		writel(readl(wdt_base + WDT_MODE) | WDT_MODE_AUTO_START |
+		       WDT_MODE_KEY, wdt_base + WDT_MODE);
+	}
+
+	while (1) {
+		writel(WDT_SWRST_KEY, wdt_base + WDT_SWRST);
+		mdelay(5);
+	}
+
+	return 0;
+}
+
+static int mtk_wdt_ping(struct watchdog_device *wdt_dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base = mtk_wdt->wdt_base;
+
+	iowrite32(WDT_RST_RELOAD, wdt_base + WDT_RST);
+	pr_info("[wdtk] kick watchdog\n");
+
+	return 0;
+}
+
+static int mtk_wdt_set_timeout(struct watchdog_device *wdt_dev,
+				unsigned int timeout)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base = mtk_wdt->wdt_base;
+	u32 reg;
+
+	wdt_dev->timeout = timeout;
+
+	/*
+	 * One bit is the value of 512 ticks
+	 * The clock has 32 KHz
+	 */
+	reg = WDT_LENGTH_TIMEOUT(timeout << 6) | WDT_LENGTH_KEY;
+	iowrite32(reg, wdt_base + WDT_LENGTH);
+
+	mtk_wdt_ping(wdt_dev);
+
+	return 0;
+}
+
+static int mtk_wdt_stop(struct watchdog_device *wdt_dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base = mtk_wdt->wdt_base;
+	u32 reg;
+
+	reg = readl(wdt_base + WDT_MODE);
+	reg &= ~WDT_MODE_EN;
+	reg |= WDT_MODE_KEY;
+	iowrite32(reg, wdt_base + WDT_MODE);
+
+	clear_bit(WDOG_HW_RUNNING, &wdt_dev->status);
+
+	return 0;
+}
+
+static int mtk_wdt_start(struct watchdog_device *wdt_dev)
+{
+	u32 reg;
+	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
+	void __iomem *wdt_base = mtk_wdt->wdt_base;
+	int ret;
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	pr_emerg("TB132FU: diagnostic build suppressed AP watchdog start\n");
+	return 0;
+#endif
+
+	ret = mtk_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
+	if (ret < 0)
+		return ret;
+
+	reg = ioread32(wdt_base + WDT_MODE);
+	reg |= (WDT_MODE_EN | WDT_MODE_KEY);
+	iowrite32(reg, wdt_base + WDT_MODE);
+
+	set_bit(WDOG_HW_RUNNING, &wdt_dev->status);
+
+	return 0;
+}
+
+static const struct watchdog_info mtk_wdt_info = {
+	.identity	= DRV_NAME,
+	.options	= WDIOF_SETTIMEOUT |
+			  WDIOF_KEEPALIVEPING |
+			  WDIOF_MAGICCLOSE,
+};
+
+static const struct watchdog_ops mtk_wdt_ops = {
+	.owner		= THIS_MODULE,
+	.start		= mtk_wdt_start,
+	.stop		= mtk_wdt_stop,
+	.ping		= mtk_wdt_ping,
+	.set_timeout	= mtk_wdt_set_timeout,
+	.restart	= mtk_wdt_restart,
+};
+
+static int mtk_wdt_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct mtk_wdt_dev *mtk_wdt;
+	struct resource *res;
+	const struct mtk_wdt_data *wdt_data;
+	int err;
+	u32 reg;
+
+	mtk_wdt = devm_kzalloc(dev, sizeof(*mtk_wdt), GFP_KERNEL);
+	if (!mtk_wdt)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, mtk_wdt);
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mtk_wdt->wdt_base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(mtk_wdt->wdt_base))
+		return PTR_ERR(mtk_wdt->wdt_base);
+
+	mtk_wdt->wdt_dev.info = &mtk_wdt_info;
+	mtk_wdt->wdt_dev.ops = &mtk_wdt_ops;
+	mtk_wdt->wdt_dev.timeout = WDT_MAX_TIMEOUT;
+	mtk_wdt->wdt_dev.max_hw_heartbeat_ms = WDT_MAX_TIMEOUT * 1000;
+	mtk_wdt->wdt_dev.min_timeout = WDT_MIN_TIMEOUT;
+	mtk_wdt->wdt_dev.parent = dev;
+
+	watchdog_init_timeout(&mtk_wdt->wdt_dev, timeout, dev);
+	watchdog_set_nowayout(&mtk_wdt->wdt_dev, nowayout);
+	watchdog_set_restart_priority(&mtk_wdt->wdt_dev, 128);
+
+	watchdog_set_drvdata(&mtk_wdt->wdt_dev, mtk_wdt);
+
+	mtk_wdt_init(pdev->dev.of_node, &mtk_wdt->wdt_dev);
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	timer_setup(&mtk_wdt->tb132fu_diagnostic_timer,
+		    tb132fu_diagnostic_disable_watchdog, 0);
+	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
+#endif
+
+	watchdog_stop_on_reboot(&mtk_wdt->wdt_dev);
+	err = devm_watchdog_register_device(dev, &mtk_wdt->wdt_dev);
+	if (unlikely(err))
+		return err;
+
+	dev_info(dev, "Watchdog enabled (timeout=%d sec, nowayout=%d)\n",
+		 mtk_wdt->wdt_dev.timeout, nowayout);
+
+	/* Exact Lenovo MT6893 TOPRGU request handoff. */
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_MODE);
+	reg &= ~WDT_REQ_MODE_DEBUG_EN;
+	reg |= WDT_REQ_MODE_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_MODE);
+
+	/* Enable direct reset requests for scpsys thermal and thermal control. */
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_MODE);
+	reg |= BIT(18) | BIT(0) | WDT_REQ_MODE_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_MODE);
+
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_IRQ_EN);
+	reg &= ~(BIT(18) | BIT(0));
+	reg |= WDT_REQ_IRQ_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_IRQ_EN);
+
+	dev_info(dev, "TB132FU Lenovo TOPRGU handoff applied\n");
+
+	wdt_data = of_device_get_match_data(dev);
+	if (wdt_data) {
+		err = toprgu_register_reset_controller(pdev,
+						       wdt_data->toprgu_sw_rst_num);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_MEDIATEK_WATCHDOG_PM)
+static int mtk_wdt_suspend(struct device *dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = dev_get_drvdata(dev);
+	if (watchdog_hw_running(&mtk_wdt->wdt_dev))
+		mtk_wdt_stop(&mtk_wdt->wdt_dev);
+
+	return 0;
+}
+
+static int mtk_wdt_resume(struct device *dev)
+{
+	struct mtk_wdt_dev *mtk_wdt = dev_get_drvdata(dev);
+
+	if (watchdog_hw_running(&mtk_wdt->wdt_dev)) {
+		mtk_wdt_start(&mtk_wdt->wdt_dev);
+		mtk_wdt_ping(&mtk_wdt->wdt_dev);
+	}
+
+	return 0;
+}
+
+static const struct dev_pm_ops mtk_wdt_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(mtk_wdt_suspend,
+				mtk_wdt_resume)
+};
+#endif
+
+static const struct of_device_id mtk_wdt_dt_ids[] = {
+	{ .compatible = "mediatek,mt2712-wdt", .data = &mt2712_data },
+	{ .compatible = "mediatek,mt6589-wdt" },
+	{ .compatible = "mediatek,mt8183-wdt", .data = &mt8183_data },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, mtk_wdt_dt_ids);
+
+static struct platform_driver mtk_wdt_driver = {
+	.probe		= mtk_wdt_probe,
+	.driver		= {
+		.name		= DRV_NAME,
+#if defined(CONFIG_PM_SLEEP) && defined(CONFIG_MEDIATEK_WATCHDOG_PM)
+		.pm		= &mtk_wdt_pm_ops,
+#endif
+		.of_match_table	= mtk_wdt_dt_ids,
+	},
+};
+
+module_platform_driver(mtk_wdt_driver);
+
+module_param(timeout, uint, 0);
+MODULE_PARM_DESC(timeout, "Watchdog heartbeat in seconds");
+
+module_param(nowayout, bool, 0);
+MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default="
+			__MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Matthias Brugger <matthias.bgg@gmail.com>");
+MODULE_DESCRIPTION("Mediatek WatchDog Timer Driver");
+MODULE_VERSION(DRV_VERSION);
