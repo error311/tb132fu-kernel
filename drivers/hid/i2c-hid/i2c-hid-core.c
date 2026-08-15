@@ -1405,16 +1405,16 @@ static int i2c_hid_probe(struct i2c_client *client,
 
 	if (ihid->tb132fu_keyboard)
 		snprintf(hid->name, sizeof(hid->name),
-			 "%s %04hX:%04hX P11 Pro Gen2 Keyboard",
-			 client->name, hid->vendor, hid->product);
+			 "%s %04X:%04X P11 Pro Gen2 Keyboard",
+			 client->name, (u16)hid->vendor, (u16)hid->product);
 	else if (hid->vendor == I2C_VENDOR_ID_HT32F5_MOUSE &&
 		 hid->product == I2C_PRODUCT_ID_HT32F5_MOUSE)
 		snprintf(hid->name, sizeof(hid->name),
-			 "%s %04hX:%04hX P11 Pro Gen2 TouchPad",
-			 client->name, hid->vendor, hid->product);
+			 "%s %04X:%04X P11 Pro Gen2 TouchPad",
+			 client->name, (u16)hid->vendor, (u16)hid->product);
 	else
-		snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
-			 client->name, hid->vendor, hid->product);
+		snprintf(hid->name, sizeof(hid->name), "%s %04X:%04X",
+			 client->name, (u16)hid->vendor, (u16)hid->product);
 	strlcpy(hid->phys, dev_name(&client->dev), sizeof(hid->phys));
 
 	ihid->quirks = i2c_hid_lookup_quirk(hid->vendor, hid->product);

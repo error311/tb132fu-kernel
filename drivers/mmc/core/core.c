@@ -1804,8 +1804,11 @@ int mmc_execute_tuning(struct mmc_card *card)
 	} else {
 		pr_info("%s: tuning execution ok: %d\n",
 			mmc_hostname(host), err);
+		host->retune_now = 0;
+		host->need_retune = 0;
 		mmc_retune_enable(host);
 	}
+
 	return err;
 }
 
