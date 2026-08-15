@@ -633,9 +633,10 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = prop.intval;
 		}
 #else
-		val->intval =
-			fg_table_cust_data.fg_profile[gm.battery_id].q_max
-			* 1000;
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval =
+				fg_table_cust_data.fg_profile[gm.battery_id].q_max
+				* 1000;
 #endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
@@ -647,9 +648,10 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = prop.intval;
 		}
 #else
-		val->intval = gm.ui_soc *
-			fg_table_cust_data.fg_profile[gm.battery_id].q_max
-			* 1000 / 100;
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval = gm.ui_soc *
+				fg_table_cust_data.fg_profile[gm.battery_id].q_max
+				* 1000 / 100;
 #endif
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
@@ -694,6 +696,16 @@ static int battery_get_property(struct power_supply *psy,
 		val->intval = check_cap_level(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
+		ret = tb132fu_bq27541_get_property(psp, val);
+		if (ret == 0)
+			break;
+		if (ret != -ENODEV) {
+			/* The BQ27541 uses -ENODATA when it cannot form an estimate. */
+			val->intval = 0;
+			ret = 0;
+			break;
+		}
+
 		/* full or unknown must return 0 */
 		ret = check_cap_level(data->BAT_CAPACITY);
 		if ((ret == POWER_SUPPLY_CAPACITY_LEVEL_FULL) ||
@@ -703,7 +715,7 @@ static int battery_get_property(struct power_supply *psy,
 			int q_max_now = fg_table_cust_data.fg_profile[
 						gm.battery_id].q_max;
 			int remain_ui = 100 - data->BAT_CAPACITY;
-			int remain_mah = remain_ui * q_max_now / 10;
+			int remain_mah = remain_ui * q_max_now / 100;
 			int time_to_full = 0;
 
 			gauge_get_current(&fgcurrent);
@@ -728,6 +740,8 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = prop.intval;
 		}
 #else
+		if (tb132fu_bq27541_get_property(psp, val) == 0)
+			break;
 		if (check_cap_level(data->BAT_CAPACITY) ==
 			POWER_SUPPLY_CAPACITY_LEVEL_UNKNOWN)
 			val->intval = 0;

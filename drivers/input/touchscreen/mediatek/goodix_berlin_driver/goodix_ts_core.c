@@ -27,6 +27,7 @@
 
 #include <linux/string.h>
 #include <linux/cdev.h>
+#include <linux/mtk_drm_doze.h>
 #include "goodix_ts_core.h"
 
 #define GOODIX_DEFAULT_CFG_NAME		"goodix_cfg_group.cfg"
@@ -2226,14 +2227,52 @@ int goodix_ts_fb_notifier_callback(struct notifier_block *self,
 		} else if (event == FB_EVENT_BLANK) {
 			int *blank = fb_event->data;
 
-			if (*blank == FB_BLANK_UNBLANK)
+			if (*blank == FB_BLANK_UNBLANK) {
+#if IS_REACHABLE(CONFIG_DRM_MEDIATEK)
+				if (atomic_read(&core_data->drm_doze_active))
+					return 0;
+#endif
 				goodix_ts_resume(core_data);
-			else if (*blank == FB_BLANK_POWERDOWN)
+			} else if (*blank == FB_BLANK_POWERDOWN) {
 				goodix_ts_suspend(core_data);
+			}
 		}
 	}
 
 	return 0;
+}
+#endif
+
+#if IS_REACHABLE(CONFIG_DRM_MEDIATEK)
+static int goodix_ts_drm_doze_notifier_callback(struct notifier_block *self,
+						unsigned long event, void *data)
+{
+	struct goodix_ts_core *core_data = container_of(self,
+			struct goodix_ts_core, drm_doze_notifier);
+	struct mtk_drm_doze_state *state = data;
+
+	if (!state || state->crtc_index != 0)
+		return NOTIFY_DONE;
+
+	switch (event) {
+	case MTK_DRM_DOZE_ENTER:
+		atomic_set(&core_data->drm_doze_active, 1);
+		ts_info("DRM doze enter: arm gesture suspend");
+		goodix_ts_suspend(core_data);
+		break;
+	case MTK_DRM_DOZE_EXIT:
+		atomic_set(&core_data->drm_doze_active, 0);
+		ts_info("DRM doze exit: display active %d", state->active);
+		if (state->active)
+			goodix_ts_resume(core_data);
+		else
+			goodix_ts_suspend(core_data);
+		break;
+	default:
+		return NOTIFY_DONE;
+	}
+
+	return NOTIFY_OK;
 }
 #endif
 
@@ -2337,6 +2376,16 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 
 	/* gesture init */
 	gesture_module_init();
+
+#if IS_REACHABLE(CONFIG_DRM_MEDIATEK)
+	cd->drm_doze_notifier.notifier_call =
+		goodix_ts_drm_doze_notifier_callback;
+	ret = mtk_drm_doze_register_client(&cd->drm_doze_notifier);
+	if (ret)
+		ts_err("Failed to register DRM doze notifier:%d", ret);
+	else
+		cd->drm_doze_registered = true;
+#endif
 
 	/* inspect init */
 	inspect_module_init();
@@ -2587,6 +2636,10 @@ static int goodix_ts_remove(struct platform_device *pdev)
 	goodix_tools_exit();
 
 	if (core_data->init_stage >= CORE_INIT_STAGE2) {
+	#if IS_REACHABLE(CONFIG_DRM_MEDIATEK)
+		if (core_data->drm_doze_registered)
+			mtk_drm_doze_unregister_client(&core_data->drm_doze_notifier);
+	#endif
 		gesture_module_exit();
 		inspect_module_exit();
 		hw_ops->irq_enable(core_data, false);

@@ -188,7 +188,7 @@ static u8
 		[BQ27XXX_REG_AI] = 0x14,
 		[BQ27XXX_REG_FLAGS] = 0x0a,
 		[BQ27XXX_REG_TTE] = 0x16,
-		[BQ27XXX_REG_TTF] = INVALID_REG_ADDR,
+		[BQ27XXX_REG_TTF] = 0x18,
 		[BQ27XXX_REG_TTES] = 0x1a,
 		[BQ27XXX_REG_TTECP] = INVALID_REG_ADDR,
 		[BQ27XXX_REG_NAC] = 0x0c,
@@ -620,6 +620,7 @@ static enum power_supply_property bq27541_props[] = {
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
+	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_NOW,
@@ -1881,9 +1882,8 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 		break;
 #if defined(CONFIG_MACH_MT6893)
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
-		ret = bq27xxx_simple_value(di->cache.capacity, val);
-		if (val->intval >= 0)
-			val->intval = ((val->intval) * 8000) / 100;
+		/* POWER_SUPPLY_PROP_CHARGE_COUNTER is reported in microamp-hours. */
+		ret = bq27xxx_simple_value(bq27xxx_battery_read_nac(di), val);
 		break;
 #endif
 	default:

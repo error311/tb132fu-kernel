@@ -14,6 +14,7 @@
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/kthread.h>
+#include <linux/mtk_drm_doze.h>
 #include <linux/sched.h>
 #include <uapi/linux/sched/types.h>
 #include <drm/drm_auth.h>
@@ -73,6 +74,19 @@
 static atomic_t top_isr_ref; /* irq power status protection */
 static atomic_t top_clk_ref; /* top clk status protection*/
 static spinlock_t top_clk_lock; /* power status protection*/
+static BLOCKING_NOTIFIER_HEAD(mtk_drm_doze_notifier);
+
+int mtk_drm_doze_register_client(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&mtk_drm_doze_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(mtk_drm_doze_register_client);
+
+int mtk_drm_doze_unregister_client(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&mtk_drm_doze_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(mtk_drm_doze_unregister_client);
 
 int mtk_atoi(const char *str);
 
@@ -899,6 +913,40 @@ static void mtk_atomic_doze_finish(struct drm_device *dev,
 
 }
 
+static void mtk_atomic_notify_doze(struct drm_atomic_state *state)
+{
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *old_state, *new_state;
+	struct mtk_crtc_state *old_mtk_state, *new_mtk_state;
+	struct mtk_drm_doze_state doze_state;
+	unsigned long event;
+	int i;
+
+	for_each_oldnew_crtc_in_state(state, crtc, old_state, new_state, i) {
+		/* CRTC 0 is the internal panel; external outputs do not own touch. */
+		if (drm_crtc_index(crtc) != 0)
+			continue;
+
+		old_mtk_state = to_mtk_crtc_state(old_state);
+		new_mtk_state = to_mtk_crtc_state(new_state);
+		if (old_mtk_state->prop_val[CRTC_PROP_DOZE_ACTIVE] ==
+		    new_mtk_state->prop_val[CRTC_PROP_DOZE_ACTIVE])
+			continue;
+
+		doze_state.active = new_state->active;
+		doze_state.crtc_index = drm_crtc_index(crtc);
+		event = new_mtk_state->prop_val[CRTC_PROP_DOZE_ACTIVE] ?
+			MTK_DRM_DOZE_ENTER : MTK_DRM_DOZE_EXIT;
+
+		DDPINFO("[CRTC:%d:%s] notify doze %s, active:%d\n",
+			crtc->base.id, crtc->name,
+			event == MTK_DRM_DOZE_ENTER ? "enter" : "exit",
+			doze_state.active);
+		blocking_notifier_call_chain(&mtk_drm_doze_notifier, event,
+					     &doze_state);
+	}
+}
+
 static bool mtk_drm_is_enable_from_lk(struct drm_crtc *crtc)
 {
 	/* TODO: check if target CRTC has been turn on in LK */
@@ -1053,6 +1101,7 @@ static void mtk_atomic_complete(struct mtk_drm_private *private,
 	}
 
 	mtk_atomic_doze_finish(drm, state);
+	mtk_atomic_notify_doze(state);
 
 	if (!mtk_drm_helper_get_opt(private->helper_opt,
 				    MTK_DRM_OPT_COMMIT_NO_WAIT_VBLANK))
