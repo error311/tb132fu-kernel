@@ -524,6 +524,11 @@ struct goodix_ts_core {
 #if IS_ENABLED(CONFIG_FB)
 	struct notifier_block fb_notifier;
 #endif
+#if IS_REACHABLE(CONFIG_DRM_MEDIATEK)
+	struct notifier_block drm_doze_notifier;
+	atomic_t drm_doze_active;
+	int drm_doze_registered;
+#endif
 #if IS_ENABLED(CONFIG_CHARGER_CTN730)
 	struct notifier_block ctn730_notifier;
 #endif
