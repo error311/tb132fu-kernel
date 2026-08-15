@@ -568,19 +568,17 @@ static int mtk_spi_fifo_transfer(struct spi_master *master,
 	mtk_spi_prepare_transfer(master, xfer, spi);
 	mtk_spi_setup_packet(master);
 
-	cnt = xfer->len / 4;
-	if (xfer->tx_buf)
+	if (xfer->tx_buf) {
+		cnt = xfer->len / 4;
 		iowrite32_rep(mdata->base + SPI_TX_DATA_REG, xfer->tx_buf, cnt);
-	/* RX FIFO is consumed after transfer completion in mtk_spi_interrupt(). */
-
-	remainder = xfer->len % 4;
-	if (remainder > 0) {
-		reg_val = 0;
-		if (xfer->tx_buf) {
+		remainder = xfer->len % 4;
+		if (remainder > 0) {
+			reg_val = 0;
 			memcpy(&reg_val, xfer->tx_buf + (cnt * 4), remainder);
 			writel(reg_val, mdata->base + SPI_TX_DATA_REG);
 		}
 	}
+	/* RX FIFO is consumed after transfer completion in mtk_spi_interrupt(). */
 
 	spi_debug("spi setting Done.Dump reg before Transfer start:\n");
 	spi_dump_reg(mdata, master);
