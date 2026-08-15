@@ -38,6 +38,9 @@
 #include <linux/mutex.h>
 #include <linux/acpi.h>
 #include <linux/of.h>
+#include <linux/of_gpio.h>
+#include <linux/gpio.h>
+#include <linux/kobject.h>
 #include <linux/regulator/consumer.h>
 
 #include <linux/platform_data/i2c-hid.h>
@@ -62,6 +65,17 @@
 
 #define I2C_HID_PWR_ON		0x00
 #define I2C_HID_PWR_SLEEP	0x01
+
+/* TB132FU keyboard and touchpad HID controller identifiers. */
+#define TB132FU_KEYBOARD_VENDOR	I2C_VENDOR_ID_HT32F5_KEY
+#define TB132FU_KEYBOARD_PRODUCT	I2C_PRODUCT_ID_HT32F5_KEY
+
+static DEFINE_MUTEX(tb132fu_accessory_lock);
+static bool tb132fu_mcu_initialized;
+static int tb132fu_mcu_hall_gpio = -EINVAL;
+static int tb132fu_cover_closed = -1;
+static int tb132fu_pogo_sw_en_gpio = -EINVAL;
+static struct kobject *tb132fu_pogo_kobj;
 
 /* debug option */
 static bool debug;
@@ -163,6 +177,13 @@ struct i2c_hid {
 
 	bool			irq_wake_enabled;
 	struct mutex		reset_lock;
+	struct mutex		input_lock;
+	struct work_struct	connection_work;
+	bool			tb132fu_accessory;
+	bool			tb132fu_keyboard;
+	bool			keyboard_connected;
+	bool			input_registered;
+	struct regulator	*vfp_supply;
 
 	unsigned long		sleep_delay;
 };
@@ -176,6 +197,12 @@ static const struct i2c_hid_quirks {
 		I2C_HID_QUIRK_SET_PWR_WAKEUP_DEV },
 	{ USB_VENDOR_ID_WEIDA, USB_DEVICE_ID_WEIDA_8755,
 		I2C_HID_QUIRK_SET_PWR_WAKEUP_DEV },
+	{ I2C_VENDOR_ID_HT32F5_KEY, I2C_PRODUCT_ID_HT32F5_KEY,
+		I2C_HID_QUIRK_NO_IRQ_AFTER_RESET |
+		I2C_HID_QUIRK_NO_RUNTIME_PM },
+	{ I2C_VENDOR_ID_HT32F5_MOUSE, I2C_PRODUCT_ID_HT32F5_MOUSE,
+		I2C_HID_QUIRK_NO_IRQ_AFTER_RESET |
+		I2C_HID_QUIRK_NO_RUNTIME_PM },
 	{ I2C_VENDOR_ID_HANTICK, I2C_PRODUCT_ID_HANTICK_5288,
 		I2C_HID_QUIRK_NO_IRQ_AFTER_RESET |
 		I2C_HID_QUIRK_NO_RUNTIME_PM },
@@ -538,6 +565,16 @@ static void i2c_hid_get_input(struct i2c_hid *ihid)
 	}
 
 	i2c_hid_dbg(ihid, "input: %*ph\n", ret_size, ihid->inbuf);
+
+	if (ihid->tb132fu_keyboard && ihid->hid && ret_size >= 9 &&
+	    ihid->inbuf[2] == 0x06) {
+		bool connected = ihid->inbuf[3] & 0x01;
+
+		if (connected != ihid->keyboard_connected) {
+			ihid->keyboard_connected = connected;
+			schedule_work(&ihid->connection_work);
+		}
+	}
 
 	if (test_bit(I2C_HID_STARTED, &ihid->flags))
 		hid_input_report(ihid->hid, HID_INPUT_REPORT, ihid->inbuf + 2,
@@ -998,6 +1035,172 @@ static inline int i2c_hid_acpi_pdata(struct i2c_client *client,
 static inline void i2c_hid_acpi_fix_up_power(struct device *dev) {}
 #endif
 
+void tb132fu_i2c_hid_set_cover_state(bool closed)
+{
+	mutex_lock(&tb132fu_accessory_lock);
+	tb132fu_cover_closed = closed;
+	if (gpio_is_valid(tb132fu_mcu_hall_gpio))
+		gpio_direction_output(tb132fu_mcu_hall_gpio, closed ? 1 : 0);
+	mutex_unlock(&tb132fu_accessory_lock);
+}
+EXPORT_SYMBOL_GPL(tb132fu_i2c_hid_set_cover_state);
+
+static ssize_t tb132fu_pogo_value_show(struct kobject *kobj,
+				       struct kobj_attribute *attr, char *buf)
+{
+	if (!gpio_is_valid(tb132fu_pogo_sw_en_gpio))
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 gpio_get_value(tb132fu_pogo_sw_en_gpio));
+}
+
+static ssize_t tb132fu_pogo_value_store(struct kobject *kobj,
+					struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	bool enabled;
+	int ret;
+
+	if (!gpio_is_valid(tb132fu_pogo_sw_en_gpio))
+		return -ENODEV;
+
+	ret = kstrtobool(buf, &enabled);
+	if (ret)
+		return ret;
+
+	ret = gpio_direction_output(tb132fu_pogo_sw_en_gpio, enabled);
+	return ret ? ret : count;
+}
+
+static struct kobj_attribute tb132fu_pogo_value_attr =
+	__ATTR(pogo_gpio_value, 0644, tb132fu_pogo_value_show,
+	       tb132fu_pogo_value_store);
+
+static int tb132fu_pogo_init(struct device *dev, int gpio)
+{
+	int ret = 0;
+
+	if (!gpio_is_valid(gpio))
+		return 0;
+
+	mutex_lock(&tb132fu_accessory_lock);
+	if (gpio_is_valid(tb132fu_pogo_sw_en_gpio))
+		goto out;
+
+	ret = gpio_request(gpio, "pogo_sw_en_gpio");
+	if (ret)
+		goto out;
+
+	ret = gpio_direction_output(gpio, 0);
+	if (ret) {
+		gpio_free(gpio);
+		goto out;
+	}
+
+	tb132fu_pogo_sw_en_gpio = gpio;
+	tb132fu_pogo_kobj = kobject_create_and_add("pogo_en_gpio", NULL);
+	if (!tb132fu_pogo_kobj) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = sysfs_create_file(tb132fu_pogo_kobj,
+				&tb132fu_pogo_value_attr.attr);
+	if (ret) {
+		kobject_put(tb132fu_pogo_kobj);
+		tb132fu_pogo_kobj = NULL;
+	}
+out:
+	mutex_unlock(&tb132fu_accessory_lock);
+	if (ret)
+		dev_warn(dev, "failed to initialize pogo power control: %d\n", ret);
+	return ret;
+}
+
+static int tb132fu_accessory_init(struct i2c_client *client,
+				  struct i2c_hid *ihid)
+{
+	struct i2c_hid_platform_data *pdata = &ihid->pdata;
+	int hall_value;
+	int ret = 0;
+
+	mutex_lock(&tb132fu_accessory_lock);
+	if (tb132fu_mcu_initialized)
+		goto out;
+
+	ihid->vfp_supply = devm_regulator_get(&client->dev, "vfp");
+	if (IS_ERR(ihid->vfp_supply)) {
+		ret = PTR_ERR(ihid->vfp_supply);
+		goto out;
+	}
+
+	if (regulator_count_voltages(ihid->vfp_supply) > 0) {
+		ret = regulator_set_voltage(ihid->vfp_supply, 3300000, 3300000);
+		if (ret)
+			goto out;
+	}
+
+	ret = regulator_enable(ihid->vfp_supply);
+	if (ret)
+		goto out;
+
+	ret = gpio_request(pdata->mcu_rst_gpio, "mcu_rst_gpio");
+	if (ret)
+		goto disable_supply;
+	ret = gpio_direction_output(pdata->mcu_rst_gpio, 1);
+	if (ret)
+		goto free_reset;
+
+	ret = gpio_request(pdata->mcu_hall_int_gpio, "mcu_hall_int_gpio");
+	if (ret)
+		goto free_reset;
+	hall_value = tb132fu_cover_closed < 0 ? 1 : tb132fu_cover_closed;
+	ret = gpio_direction_output(pdata->mcu_hall_int_gpio, hall_value);
+	if (ret)
+		goto free_hall;
+
+	msleep(100);
+	tb132fu_mcu_hall_gpio = pdata->mcu_hall_int_gpio;
+	tb132fu_mcu_initialized = true;
+	goto out;
+
+free_hall:
+	gpio_free(pdata->mcu_hall_int_gpio);
+free_reset:
+	gpio_free(pdata->mcu_rst_gpio);
+disable_supply:
+	regulator_disable(ihid->vfp_supply);
+out:
+	mutex_unlock(&tb132fu_accessory_lock);
+	return ret;
+}
+
+static void tb132fu_keyboard_connection_work(struct work_struct *work)
+{
+	struct i2c_hid *ihid = container_of(work, struct i2c_hid,
+					   connection_work);
+	struct hid_device *hid = ihid->hid;
+	int ret;
+
+	if (!hid)
+		return;
+
+	mutex_lock(&ihid->input_lock);
+	if (ihid->keyboard_connected && !ihid->input_registered) {
+		ret = hidinput_connect(hid, 0);
+		if (!ret) {
+			hid->claimed |= HID_CLAIMED_INPUT;
+			ihid->input_registered = true;
+		}
+	} else if (!ihid->keyboard_connected && ihid->input_registered) {
+		hidinput_disconnect(hid);
+		hid->claimed &= ~HID_CLAIMED_INPUT;
+		ihid->input_registered = false;
+	}
+	mutex_unlock(&ihid->input_lock);
+}
+
 #ifdef CONFIG_OF
 static int i2c_hid_of_probe(struct i2c_client *client,
 		struct i2c_hid_platform_data *pdata)
@@ -1017,6 +1220,22 @@ static int i2c_hid_of_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 	pdata->hid_descriptor_address = val;
+
+	pdata->mcu_en_gpio = of_get_named_gpio(dev->of_node,
+					       "mcu_en_gpio", 0);
+	if (gpio_is_valid(pdata->mcu_en_gpio)) {
+		pdata->mcu_rst_gpio = of_get_named_gpio(dev->of_node,
+							"mcu_rst_gpio", 0);
+		pdata->mcu_hall_int_gpio = of_get_named_gpio(dev->of_node,
+							     "mcu_hall_int_gpio", 0);
+		if (!gpio_is_valid(pdata->mcu_rst_gpio) ||
+		    !gpio_is_valid(pdata->mcu_hall_int_gpio)) {
+			dev_err(dev, "incomplete TB132FU accessory GPIO data\n");
+			return -EINVAL;
+		}
+		pdata->pogo_sw_en_gpio = of_get_named_gpio(dev->of_node,
+							   "pogo_sw_en_gpio", 0);
+	}
 
 	return 0;
 }
@@ -1071,6 +1290,12 @@ static int i2c_hid_probe(struct i2c_client *client,
 	ihid = devm_kzalloc(&client->dev, sizeof(*ihid), GFP_KERNEL);
 	if (!ihid)
 		return -ENOMEM;
+	ihid->pdata.mcu_en_gpio = -EINVAL;
+	ihid->pdata.mcu_rst_gpio = -EINVAL;
+	ihid->pdata.mcu_hall_int_gpio = -EINVAL;
+	ihid->pdata.pogo_sw_en_gpio = -EINVAL;
+	mutex_init(&ihid->input_lock);
+	INIT_WORK(&ihid->connection_work, tb132fu_keyboard_connection_work);
 
 	if (client->dev.of_node) {
 		ret = i2c_hid_of_probe(client, &ihid->pdata);
@@ -1086,20 +1311,28 @@ static int i2c_hid_probe(struct i2c_client *client,
 
 	/* Parse platform agnostic common properties from ACPI / device tree */
 	i2c_hid_fwnode_probe(client, &ihid->pdata);
+	ihid->tb132fu_accessory = gpio_is_valid(ihid->pdata.mcu_en_gpio);
 
-	ihid->pdata.supplies[0].supply = "vdd";
-	ihid->pdata.supplies[1].supply = "vddl";
+	if (ihid->tb132fu_accessory) {
+		ret = tb132fu_accessory_init(client, ihid);
+		if (ret)
+			return ret;
+		tb132fu_pogo_init(&client->dev, ihid->pdata.pogo_sw_en_gpio);
+	} else {
+		ihid->pdata.supplies[0].supply = "vdd";
+		ihid->pdata.supplies[1].supply = "vddl";
 
-	ret = devm_regulator_bulk_get(&client->dev,
-				      ARRAY_SIZE(ihid->pdata.supplies),
-				      ihid->pdata.supplies);
-	if (ret)
-		return ret;
+		ret = devm_regulator_bulk_get(&client->dev,
+					      ARRAY_SIZE(ihid->pdata.supplies),
+					      ihid->pdata.supplies);
+		if (ret)
+			return ret;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(ihid->pdata.supplies),
-				    ihid->pdata.supplies);
-	if (ret < 0)
-		return ret;
+		ret = regulator_bulk_enable(ARRAY_SIZE(ihid->pdata.supplies),
+					    ihid->pdata.supplies);
+		if (ret < 0)
+			return ret;
+	}
 
 	if (ihid->pdata.post_power_delay_ms)
 		msleep(ihid->pdata.post_power_delay_ms);
@@ -1159,9 +1392,29 @@ static int i2c_hid_probe(struct i2c_client *client,
 	hid->version = le16_to_cpu(ihid->hdesc.bcdVersion);
 	hid->vendor = le16_to_cpu(ihid->hdesc.wVendorID);
 	hid->product = le16_to_cpu(ihid->hdesc.wProductID);
+	ihid->tb132fu_keyboard =
+		hid->vendor == TB132FU_KEYBOARD_VENDOR &&
+		hid->product == TB132FU_KEYBOARD_PRODUCT;
+	if (ihid->tb132fu_keyboard)
+		/* The accessory MCU reports the real pogo attach state in input
+		 * report 0x06.  Treat it as detached until that report arrives;
+		 * otherwise Android sees a permanent physical keyboard and enters
+		 * desktop-first mode even with the cover removed.
+		 */
+		ihid->keyboard_connected = false;
 
-	snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
-		 client->name, hid->vendor, hid->product);
+	if (ihid->tb132fu_keyboard)
+		snprintf(hid->name, sizeof(hid->name),
+			 "%s %04hX:%04hX P11 Pro Gen2 Keyboard",
+			 client->name, hid->vendor, hid->product);
+	else if (hid->vendor == I2C_VENDOR_ID_HT32F5_MOUSE &&
+		 hid->product == I2C_PRODUCT_ID_HT32F5_MOUSE)
+		snprintf(hid->name, sizeof(hid->name),
+			 "%s %04hX:%04hX P11 Pro Gen2 TouchPad",
+			 client->name, hid->vendor, hid->product);
+	else
+		snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
+			 client->name, hid->vendor, hid->product);
 	strlcpy(hid->phys, dev_name(&client->dev), sizeof(hid->phys));
 
 	ihid->quirks = i2c_hid_lookup_quirk(hid->vendor, hid->product);
@@ -1175,6 +1428,9 @@ static int i2c_hid_probe(struct i2c_client *client,
 
 	if (!(ihid->quirks & I2C_HID_QUIRK_NO_RUNTIME_PM))
 		pm_runtime_put(&client->dev);
+	ihid->input_registered = !list_empty(&hid->inputs);
+	if (ihid->tb132fu_keyboard)
+		schedule_work(&ihid->connection_work);
 
 	return 0;
 
@@ -1189,8 +1445,9 @@ err_pm:
 	pm_runtime_disable(&client->dev);
 
 err_regulator:
-	regulator_bulk_disable(ARRAY_SIZE(ihid->pdata.supplies),
-			       ihid->pdata.supplies);
+	if (!ihid->tb132fu_accessory)
+		regulator_bulk_disable(ARRAY_SIZE(ihid->pdata.supplies),
+				       ihid->pdata.supplies);
 	i2c_hid_free_buffers(ihid);
 	return ret;
 }
@@ -1207,6 +1464,7 @@ static int i2c_hid_remove(struct i2c_client *client)
 	pm_runtime_put_noidle(&client->dev);
 
 	hid = ihid->hid;
+	cancel_work_sync(&ihid->connection_work);
 	hid_destroy_device(hid);
 
 	free_irq(client->irq, ihid);
@@ -1214,8 +1472,9 @@ static int i2c_hid_remove(struct i2c_client *client)
 	if (ihid->bufsize)
 		i2c_hid_free_buffers(ihid);
 
-	regulator_bulk_disable(ARRAY_SIZE(ihid->pdata.supplies),
-			       ihid->pdata.supplies);
+	if (!ihid->tb132fu_accessory)
+		regulator_bulk_disable(ARRAY_SIZE(ihid->pdata.supplies),
+				       ihid->pdata.supplies);
 
 	return 0;
 }
@@ -1265,7 +1524,7 @@ static int i2c_hid_suspend(struct device *dev)
 		else
 			hid_warn(hid, "Failed to enable irq wake: %d\n",
 				wake_status);
-	} else {
+	} else if (!ihid->tb132fu_accessory) {
 		regulator_bulk_disable(ARRAY_SIZE(ihid->pdata.supplies),
 				       ihid->pdata.supplies);
 	}
@@ -1281,7 +1540,7 @@ static int i2c_hid_resume(struct device *dev)
 	struct hid_device *hid = ihid->hid;
 	int wake_status;
 
-	if (!device_may_wakeup(&client->dev)) {
+	if (!device_may_wakeup(&client->dev) && !ihid->tb132fu_accessory) {
 		ret = regulator_bulk_enable(ARRAY_SIZE(ihid->pdata.supplies),
 					    ihid->pdata.supplies);
 		if (ret)

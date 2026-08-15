@@ -261,6 +261,10 @@ void mtk_drm_crtc_dump(struct drm_crtc *crtc)
 
 	for_each_comp_in_cur_crtc_path(comp, mtk_crtc, i, j) mtk_dump_reg(comp);
 
+	/* TB132FU dual-port diagnostics: DSI1 is not part of dual_path[]. */
+	if (mtk_crtc->is_dual_pipe && priv->ddp_comp[DDP_COMPONENT_DSI1])
+		mtk_dump_reg(priv->ddp_comp[DDP_COMPONENT_DSI1]);
+
 	//addon from CWB
 	if (mtk_crtc->cwb_info && mtk_crtc->cwb_info->enable
 		&& !mtk_crtc->cwb_info->is_sec) {
@@ -349,6 +353,12 @@ void mtk_drm_crtc_analysis(struct drm_crtc *crtc)
 			DDPDUMP("anlysis dual pipe\n");
 			mtk_ddp_dual_pipe_dump(mtk_crtc);
 			for_each_comp_in_dual_pipe(comp, mtk_crtc, i, j) {
+				mtk_dump_analysis(comp);
+				mtk_dump_reg(comp);
+			}
+			/* DSI1 is added to the mutex separately, not dual_path[]. */
+			comp = priv->ddp_comp[DDP_COMPONENT_DSI1];
+			if (comp) {
 				mtk_dump_analysis(comp);
 				mtk_dump_reg(comp);
 			}
@@ -9582,4 +9592,3 @@ bool mtk_drm_get_hdr_property(void)
 {
 	return hdr_en;
 }
-

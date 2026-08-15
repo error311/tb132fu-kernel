@@ -66,6 +66,28 @@ struct tag_bootmode {
 	u32 boottype;
 };
 
+static struct device_node *tb132fu_find_boot_node(struct device *dev)
+{
+	struct device_node *boot_node = NULL;
+
+	if (dev && dev->of_node)
+		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+	if (!boot_node)
+		boot_node = of_find_node_by_path("/chosen");
+
+	return boot_node;
+}
+
+static int tb132fu_normalize_boot_mode(int boot_mode)
+{
+	if ((boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT ||
+	     boot_mode == LOW_POWER_OFF_CHARGING_BOOT) &&
+	    saved_command_line &&
+	    strstr(saved_command_line, "androidboot.force_normal_boot=1"))
+		return NORMAL_BOOT;
+	return boot_mode;
+}
+
 static int _uA_to_mA(int uA)
 {
 	if (uA == -1)
@@ -119,7 +141,7 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 // workaround for mt6768 
 	dev = &(info->pdev->dev);
 	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node){
 			chr_err("%s: failed to get boot mode phandle\n", __func__);
 		}
@@ -134,6 +156,7 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 		}
 	}
 
+	boot_mode = tb132fu_normalize_boot_mode(boot_mode);
 	if (info->pe5.online) {
 		chr_err("In PE5.0\n");
 		return;
@@ -504,7 +527,7 @@ static void swchg_turn_on_charging(struct charger_manager *info)
 // workaround for mt6768 
 	dev = &(info->pdev->dev);
 	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node){
 			chr_err("%s: failed to get boot mode phandle\n", __func__);
 		}
@@ -519,6 +542,7 @@ static void swchg_turn_on_charging(struct charger_manager *info)
 		}
 	}
 
+	boot_mode = tb132fu_normalize_boot_mode(boot_mode);
 	if (swchgalg->state == CHR_ERROR) {
 		charging_enable = false;
 		chr_err("[charger]Charger Error, turn OFF charging !\n");

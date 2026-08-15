@@ -128,6 +128,22 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_AGE,
 };
 
+static int tb132fu_bq27541_get_property(enum power_supply_property psp,
+	union power_supply_propval *val)
+{
+	struct power_supply *bq_psy;
+	int ret;
+
+	bq_psy = power_supply_get_by_name("bq27541");
+	if (!bq_psy)
+		return -ENODEV;
+
+	ret = power_supply_get_property(bq_psy, psp, val);
+	power_supply_put(bq_psy);
+
+	return ret;
+}
+
 /* boot mode */
 struct tag_bootmode {
 	u32 size;
@@ -312,6 +328,15 @@ int battery_get_boot_mode(void)
 				gm.boot_mode = tag->bootmode;
 			}
 		}
+	}
+	if ((boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT ||
+	     boot_mode == LOW_POWER_OFF_CHARGING_BOOT) &&
+	    saved_command_line &&
+	    strstr(saved_command_line, "androidboot.force_normal_boot=1")) {
+		bm_err("%s: force-normal overrides stale KPOC mode %d\n",
+		       __func__, boot_mode);
+		boot_mode = NORMAL_BOOT;
+		gm.boot_mode = NORMAL_BOOT;
 	}
 	bm_debug("%s: boot mode=%d\n", __func__, boot_mode);
 	return boot_mode;
@@ -516,7 +541,8 @@ static int battery_get_property(struct power_supply *psy,
 		val->intval = data->BAT_HEALTH;/* do not change before*/
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
-		val->intval = data->BAT_PRESENT;/* do not change before*/
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval = data->BAT_PRESENT;/* do not change before*/
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = data->BAT_TECHNOLOGY;
@@ -559,7 +585,7 @@ static int battery_get_property(struct power_supply *psy,
 #else
 		if (gm.fixed_uisoc != 0xffff)
 			val->intval = gm.fixed_uisoc;
-		else
+		else if (tb132fu_bq27541_get_property(psp, val))
 			val->intval = data->BAT_CAPACITY;
 #endif
 		break;
@@ -574,10 +600,13 @@ static int battery_get_property(struct power_supply *psy,
 		fgcurrent = 0 - fgcurrent;
 		val->intval = fgcurrent;
 #else
-		b_ischarging = gauge_get_current(&fgcurrent);
-		if (b_ischarging == false)
-			fgcurrent = 0 - fgcurrent;
-		val->intval = fgcurrent * 100;
+		ret = tb132fu_bq27541_get_property(psp, val);
+		if (ret) {
+			b_ischarging = gauge_get_current(&fgcurrent);
+			if (b_ischarging == false)
+				fgcurrent = 0 - fgcurrent;
+			val->intval = fgcurrent * 100;
+		}
 #endif
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
@@ -591,7 +620,8 @@ static int battery_get_property(struct power_supply *psy,
 		fgcurrent = 0 - fgcurrent;
 		val->intval = fgcurrent;
 #else
-		val->intval = battery_get_bat_avg_current() * 100;
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval = battery_get_bat_avg_current() * 100;
 #endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
@@ -631,7 +661,8 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = prop.intval;
 		}
 #else
-		val->intval = battery_get_bat_voltage()* 1000;
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval = battery_get_bat_voltage() * 1000;
 #endif
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
@@ -652,11 +683,15 @@ static int battery_get_property(struct power_supply *psy,
 			val->intval = gm.tbat_precise;
 		}
 #else
-		val->intval = gm.tbat_precise;
+		if (tb132fu_bq27541_get_property(psp, val))
+			val->intval = gm.tbat_precise;
 #endif
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
-		val->intval = check_cap_level(data->BAT_CAPACITY);
+		if (tb132fu_bq27541_get_property(
+			    POWER_SUPPLY_PROP_CAPACITY, val))
+			val->intval = data->BAT_CAPACITY;
+		val->intval = check_cap_level(val->intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
 		/* full or unknown must return 0 */

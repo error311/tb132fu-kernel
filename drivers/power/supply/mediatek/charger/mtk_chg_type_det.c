@@ -53,6 +53,28 @@ struct tag_bootmode {
 	u32 boottype;
 };
 
+static struct device_node *tb132fu_find_boot_node(struct device *dev)
+{
+	struct device_node *boot_node = NULL;
+
+	if (dev && dev->of_node)
+		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+	if (!boot_node)
+		boot_node = of_find_node_by_path("/chosen");
+
+	return boot_node;
+}
+
+static int tb132fu_normalize_boot_mode(int boot_mode)
+{
+	if ((boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT ||
+	     boot_mode == LOW_POWER_OFF_CHARGING_BOOT) &&
+	    saved_command_line &&
+	    strstr(saved_command_line, "androidboot.force_normal_boot=1"))
+		return NORMAL_BOOT;
+	return boot_mode;
+}
+
 #ifdef CONFIG_EXTCON_USB_CHG
 struct usb_extcon_info {
 	struct device *dev;
@@ -205,7 +227,7 @@ static int mt_charger_online(struct mt_charger *mtk_chg)
 	int boot_mode = 11;//UNKNOWN_BOOT
 	dev = mtk_chg->dev;
 	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node){
 			chr_err("%s: failed to get boot mode phandle\n", __func__);
 		}
@@ -220,6 +242,7 @@ static int mt_charger_online(struct mt_charger *mtk_chg)
 		}
 	}
 
+	boot_mode = tb132fu_normalize_boot_mode(boot_mode);
 	if (!mtk_chg->chg_online) {
 // workaround for mt6768
 		//boot_mode = get_boot_mode();
@@ -1047,7 +1070,7 @@ static int mt_charger_probe(struct platform_device *pdev)
 
 	dev = &(pdev->dev);
 	if (dev != NULL) {
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node) {
 			chr_err("%s: failed to get boot mode phandle\n", __func__);
 		} else {
@@ -1058,6 +1081,7 @@ static int mt_charger_probe(struct platform_device *pdev)
 				boot_mode = tag->bootmode;
 		}
 	}
+	boot_mode = tb132fu_normalize_boot_mode(boot_mode);
 	//ret = get_boot_mode();
 	if (boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT ||
 	    boot_mode == LOW_POWER_OFF_CHARGING_BOOT)

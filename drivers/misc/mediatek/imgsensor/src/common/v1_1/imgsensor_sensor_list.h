@@ -15,6 +15,10 @@ struct IMGSENSOR_INIT_FUNC_LIST {
 	MUINT32 (*init)(struct SENSOR_FUNCTION_STRUCT **pfFunc);
 };
 
+/* Lenovo TB132FU (Onyx) sensors selected by the stock kernel config. */
+UINT32 HI1339_MIPI_RAW_SensorInit(struct SENSOR_FUNCTION_STRUCT **pfFunc);
+UINT32 GC08A3_MIPI_RAW_SensorInit(struct SENSOR_FUNCTION_STRUCT **pfFunc);
+
 /*IMX*/
 UINT32 MOT_LYRIQ_OV50E_MIPI_RAW_SensorInit(struct SENSOR_FUNCTION_STRUCT **pfFunc);
 UINT32 MOT_LYRIQ_OV50A_MIPI_RAW_SensorInit(struct SENSOR_FUNCTION_STRUCT **pfFunc);
@@ -216,4 +220,3 @@ UINT32 S5K4H7LN_MIPI_RAW_SensorInit(struct SENSOR_FUNCTION_STRUCT **pfFunc);
 extern struct IMGSENSOR_SENSOR_LIST gimgsensor_sensor_list[];
 
 #endif
-

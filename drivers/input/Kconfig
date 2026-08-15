@@ -190,6 +190,16 @@ config INPUT_HALL_IC
 	help
 	  Enable Hall IC Feature
 
+config INPUT_HALL_SENSOR
+	bool "Lenovo TB132FU folio hall sensor"
+	depends on INPUT && I2C_HID
+	help
+	  Enable the folio-cover hall sensor used by the Lenovo TB132FU.
+	  It reports the standard SW_LID event, preserves Lenovo's legacy
+	  hall key events, and coordinates the keyboard-cover MCU GPIO.
+
+source "drivers/input/sensors/aw9610x/Kconfig"
+
 comment "Input Device Drivers"
 
 source "drivers/input/keyboard/Kconfig"
@@ -219,4 +229,3 @@ source "drivers/input/gameport/Kconfig"
 endmenu
 
 endmenu
-

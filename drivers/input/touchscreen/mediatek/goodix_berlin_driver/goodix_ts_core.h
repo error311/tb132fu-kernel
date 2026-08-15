@@ -524,6 +524,9 @@ struct goodix_ts_core {
 #if IS_ENABLED(CONFIG_FB)
 	struct notifier_block fb_notifier;
 #endif
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+	struct notifier_block ctn730_notifier;
+#endif
 };
 
 /* external module structures */

@@ -11,6 +11,59 @@
 
 /* Legacy design */
 struct IMGSENSOR_HW_POWER_SEQ sensor_power_sequence[] = {
+	/* Lenovo TB132FU (Onyx) camera module variants. */
+#if defined(OV13B10_MIPI_RAW)
+	{
+		SENSOR_DRVNAME_OV13B10_MIPI_RAW,
+		{
+			{SensorMCLK, Vol_High, 1},
+			{RST, Vol_Low, 1},
+			{AVDD, Vol_High, 1},
+			{DOVDD, Vol_1800, 1},
+			{DVDD, Vol_High, 5},
+			{RST, Vol_High, 1},
+		},
+	},
+#endif
+#if defined(HI1339_MIPI_RAW)
+	{
+		SENSOR_DRVNAME_HI1339_MIPI_RAW,
+		{
+			{RST, Vol_Low, 1},
+			{DOVDD, Vol_1800, 1},
+			{AVDD, Vol_High, 1},
+			{DVDD, Vol_High, 5},
+			{SensorMCLK, Vol_High, 1},
+			{RST, Vol_High, 1},
+		},
+	},
+#endif
+#if defined(S5K4H7_MIPI_RAW)
+	{
+		SENSOR_DRVNAME_S5K4H7_MIPI_RAW,
+		{
+			{SensorMCLK, Vol_High, 5},
+			{RST, Vol_Low, 1},
+			{DVDD, Vol_High, 1},
+			{AVDD, Vol_High, 1},
+			{DOVDD, Vol_1800, 1},
+			{RST, Vol_High, 1}
+		},
+	},
+#endif
+#if defined(GC08A3_MIPI_RAW)
+	{
+		SENSOR_DRVNAME_GC08A3_MIPI_RAW,
+		{
+			{SensorMCLK, Vol_High, 5},
+			{RST, Vol_Low, 1},
+			{DOVDD, Vol_1800, 1},
+			{DVDD, Vol_High, 1},
+			{AVDD, Vol_High, 1},
+			{RST, Vol_High, 1}
+		},
+	},
+#endif
 #if defined(MOT_LYRIQ_OV50E_MIPI_RAW)
         {
                 SENSOR_DRVNAME_MOT_LYRIQ_OV50E_MIPI_RAW,
@@ -213,4 +266,3 @@ struct IMGSENSOR_HW_POWER_SEQ sensor_power_sequence[] = {
 
 	{NULL,},
 };
-

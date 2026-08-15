@@ -1880,6 +1880,7 @@ static long mtk_vcu_unlocked_ioctl(struct file *file, unsigned int cmd,
 		ret = vcu_ipi_get(vcu_dev, arg);
 		break;
 	case VCU_GET_LOG_OBJECT:
+	case VCU_GET_LOG_OBJECT_LENOVO:
 		ret = vcu_log_get(vcu_dev, arg);
 		break;
 	case VCU_MVA_ALLOCATION:
@@ -2079,6 +2080,7 @@ static long mtk_vcu_unlocked_compat_ioctl(struct file *file, unsigned int cmd,
 	case COMPAT_VCU_SET_OBJECT:
 	case VCU_GET_OBJECT:
 	case VCU_GET_LOG_OBJECT:
+	case VCU_GET_LOG_OBJECT_LENOVO:
 	case VCU_GCE_SET_CMD_FLUSH:
 	case VCU_GCE_WAIT_CALLBACK:
 		share_data32 = compat_ptr((uint32_t)arg);

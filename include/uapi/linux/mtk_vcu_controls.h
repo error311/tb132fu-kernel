@@ -186,6 +186,13 @@ enum gce_event_id {
 #define VCU_GCE_WAIT_CALLBACK _IOW('v', 9, struct gce_obj)
 #define VCU_GET_OBJECT		_IOWR('v', 10, struct share_obj)
 #define VCU_GET_LOG_OBJECT	_IOW('v', 11, struct log_test_nofuse)
+/*
+ * The TB132FU's newer Lenovo vpud appends a 32-bit field to its userspace
+ * log structure.  The payload consumed by this kernel is still the original
+ * 1024-byte log buffer, so accept the newer ioctl encoding as an ABI alias.
+ */
+#define VCU_GET_LOG_OBJECT_LENOVO \
+	_IOC(_IOC_WRITE, 'v', 11, LOG_INFO_SIZE + sizeof(__u32))
 #define VCU_SET_LOG_OBJECT	_IOW('v', 12, struct log_test)
 #define VCU_SET_MMAP_TYPE	_IOW('v', 13, struct map_obj)
 
@@ -227,4 +234,3 @@ struct log_test_nofuse {
 };
 
 #endif
-

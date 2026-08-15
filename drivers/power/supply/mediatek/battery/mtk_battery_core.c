@@ -47,6 +47,7 @@
 #include <linux/vmalloc.h>
 #include <linux/math64.h>
 #include <linux/alarmtimer.h>
+#include <linux/jiffies.h>
 
 #include <mt-plat/aee.h>
 #include <mt-plat/v1/charger_type.h>
@@ -2118,12 +2119,111 @@ void notify_fg_chr_full(void)
 /* ============================================================ */
 /* check bat plug out  */
 /* ============================================================ */
+#define TB132FU_BQ_PROBE_GRACE_SECONDS 30
+#define TB132FU_BQ_MIN_UV 2500000
+#define TB132FU_BQ_MAX_UV 4600000
+#define TB132FU_BQ_MIN_DECIC (-200)
+#define TB132FU_BQ_MAX_DECIC 800
+#define TB132FU_IGNORE_PMIC_BATON_UNDET 1
+
+/*
+ * TB132FU has an external BQ27541 fuel gauge.  Its MT6359 BATON input can
+ * report UNDET even while BQ27541 is returning a healthy, installed battery.
+ * Use the PMIC result when it is positive, but require agreement from the
+ * external gauge before treating a negative result as a physical unplug.
+ *
+ * The BQ driver is registered after the MTK battery initcall in this kernel,
+ * so allow a short bring-up grace period instead of powering off before the
+ * external gauge has had a chance to probe.  This is deliberately limited to
+ * the battery-plugout shutdown path; voltage and thermal shutdowns remain on.
+ */
+static bool tb132fu_bq27541_confirms_battery(void)
+{
+	struct power_supply *bq_psy;
+	union power_supply_propval present = { 0 };
+	union power_supply_propval voltage = { 0 };
+	union power_supply_propval temp = { 0 };
+	int present_ret;
+	int voltage_ret;
+	int temp_ret;
+	bool sane;
+
+	bq_psy = power_supply_get_by_name("bq27541");
+	if (!bq_psy)
+		return false;
+
+	present_ret = power_supply_get_property(bq_psy,
+		POWER_SUPPLY_PROP_PRESENT, &present);
+	voltage_ret = power_supply_get_property(bq_psy,
+		POWER_SUPPLY_PROP_VOLTAGE_NOW, &voltage);
+	temp_ret = power_supply_get_property(bq_psy,
+		POWER_SUPPLY_PROP_TEMP, &temp);
+	power_supply_put(bq_psy);
+
+	sane = !present_ret && present.intval == 1 &&
+		!voltage_ret && voltage.intval >= TB132FU_BQ_MIN_UV &&
+		voltage.intval <= TB132FU_BQ_MAX_UV &&
+		!temp_ret && temp.intval >= TB132FU_BQ_MIN_DECIC &&
+		temp.intval <= TB132FU_BQ_MAX_DECIC;
+
+	if (!present_ret && present.intval == 1) {
+		if (sane)
+			pr_warn_ratelimited(
+				"TB132FU: ignoring PMIC BATON_UNDET; BQ27541 present v=%duV t=%d\n",
+				voltage.intval, temp.intval);
+		else
+			pr_warn_ratelimited(
+				"TB132FU: BQ27541 confirms presence before telemetry is ready (vret=%d tret=%d)\n",
+				voltage_ret, temp_ret);
+		return true;
+	}
+
+	return false;
+}
+
+static bool tb132fu_battery_exists(void)
+{
+	static unsigned long bq_probe_grace_end;
+
+	if (pmic_is_battery_exist())
+		return true;
+
+	if (tb132fu_bq27541_confirms_battery())
+		return true;
+
+	/*
+	 * Diagnostic #44: TB132FU's pack is not user-removable and BATON_UNDET
+	 * is asserted on known-good hardware.  Ignore that one detector so we
+	 * can prove whether it is the final boot blocker.  Independent battery
+	 * voltage and temperature shutdown paths remain enabled.
+	 */
+	if (TB132FU_IGNORE_PMIC_BATON_UNDET) {
+		pr_warn_ratelimited(
+			"TB132FU: diagnostic ignoring PMIC BATON_UNDET without BQ telemetry\n");
+		return true;
+	}
+
+	if (!bq_probe_grace_end)
+		bq_probe_grace_end = jiffies +
+			TB132FU_BQ_PROBE_GRACE_SECONDS * HZ;
+
+	if (time_before(jiffies, bq_probe_grace_end)) {
+		pr_warn_ratelimited(
+			"TB132FU: deferring PMIC battery-absent shutdown while BQ27541 probes\n");
+		return true;
+	}
+
+	pr_emerg_ratelimited(
+		"TB132FU: PMIC and BQ27541 both failed battery-presence validation\n");
+	return false;
+}
+
 void sw_check_bat_plugout(void)
 {
 	int is_bat_exist;
 
 	if (gm.disable_plug_int && gm.disableGM30 != true) {
-		is_bat_exist = pmic_is_battery_exist();
+		is_bat_exist = tb132fu_battery_exists();
 		/* fg_bat_plugout_int_handler(); */
 		if (is_bat_exist == 0) {
 			bm_err(
@@ -2619,7 +2719,7 @@ void fg_bat_plugout_int_handler(void)
 	int is_bat_exist;
 	int i;
 
-	is_bat_exist = pmic_is_battery_exist();
+	is_bat_exist = tb132fu_battery_exists();
 
 	bm_err("[%s]is_bat %d miss:%d\n",
 		__func__,
@@ -2664,7 +2764,7 @@ void fg_bat_plugout_int_handler_gm25(void)
 {
 	bool is_bat_exist;
 
-	is_bat_exist = pmic_is_battery_exist();
+	is_bat_exist = tb132fu_battery_exists();
 	pr_info("%s: bat_exist: %d\n", __func__, is_bat_exist);
 
 	if (fg_interrupt_check() == false)
@@ -5113,6 +5213,3 @@ void gm3_log_dump(bool force)
 	gm.log.phone_state = 0;
 
 }
-
-
-

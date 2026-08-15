@@ -1961,7 +1961,7 @@ static void mtk_dsi_poweroff(struct mtk_dsi *dsi)
 	}
 
 	if (--dsi->clk_refcnt != 0) {
-		DDPMSG("%s: clk_refcnt = %d, skip power off\n",
+		DDPDBG("%s: clk_refcnt = %d, skip power off\n",
 			__func__, dsi->clk_refcnt);
 		return;
 	}
@@ -3458,24 +3458,52 @@ int mtk_dsi_read_gce(struct mtk_ddp_comp *comp, void *handle,
 	if (dsi->slave_dsi) {
 		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
 				dsi->slave_dsi->ddp_comp.regs_pa + DSI_CON_CTRL,
-				0x0, DSI_DUAL_EN);
+				DSI_DUAL_EN, DSI_DUAL_EN);
 	}
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_CMDQ0,
 		0x00013700, ~0);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_CMDQ0,
+			0x00013700, ~0);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_CMDQ1,
 		AS_UINT32(t0), ~0);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_CMDQ1,
+			AS_UINT32(t0), ~0);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_CMDQ_SIZE,
 		0x2, ~0);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_CMDQ_SIZE,
+			0x2, ~0);
 
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_START,
 		0x0, ~0);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_START,
+			0x0, ~0);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_START,
 		0x1, ~0);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_START,
+			0x1, ~0);
 
 	mtk_dsi_cmdq_poll(comp, handle, comp->regs_pa + DSI_INTSTA, 0x1, 0x1);
+	if (dsi->slave_dsi)
+		mtk_dsi_cmdq_poll(comp, handle,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_INTSTA,
+			0x1, 0x1);
 
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_INTSTA,
 		0x0, 0x1);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_INTSTA,
+			0x0, 0x1);
 
 	cmdq_pkt_mem_move(handle, comp->cmdq_base,
 		comp->regs_pa + DSI_RX_DATA0, read_slot + (i * 2) * 0x4,
@@ -3483,10 +3511,28 @@ int mtk_dsi_read_gce(struct mtk_ddp_comp *comp, void *handle,
 	cmdq_pkt_mem_move(handle, comp->cmdq_base,
 		comp->regs_pa + DSI_RX_DATA1, read_slot + (i * 2 + 1) * 0x4,
 		CMDQ_THR_SPR_IDX3);
+	if (dsi->slave_dsi) {
+		cmdq_pkt_mem_move(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_RX_DATA0,
+			read_slot + (i * 2 + 8) * 0x4,
+			CMDQ_THR_SPR_IDX3);
+		cmdq_pkt_mem_move(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_RX_DATA1,
+			read_slot + (i * 2 + 9) * 0x4,
+			CMDQ_THR_SPR_IDX3);
+	}
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_RACK,
 		0x1, 0x1);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_RACK,
+			0x1, 0x1);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DSI_INTSTA,
 		0x0, 0x1);
+	if (dsi->slave_dsi)
+		cmdq_pkt_write(handle, dsi->slave_dsi->ddp_comp.cmdq_base,
+			dsi->slave_dsi->ddp_comp.regs_pa + DSI_INTSTA,
+			0x0, 0x1);
 
 	mtk_dsi_poll_for_idle(dsi, handle);
 
@@ -3548,7 +3594,8 @@ int mtk_dsi_esd_read(struct mtk_ddp_comp *comp, void *handle, uintptr_t slot)
 int mtk_dsi_esd_cmp(struct mtk_ddp_comp *comp, void *handle, void *slot)
 {
 	int i, ret = 0;
-	u32 tmp0, tmp1, chk_val;
+	u32 tmp0 = 0, tmp1 = 0, tmp2 = 0, tmp3 = 0;
+	u32 chk_val, chk_val1 = 0;
 	struct mtk_dsi *dsi = container_of(comp, struct mtk_dsi, ddp_comp);
 	struct esd_check_item *lcm_esd_tb;
 	struct mtk_panel_params *params;
@@ -3565,9 +3612,17 @@ int mtk_dsi_esd_cmp(struct mtk_ddp_comp *comp, void *handle, void *slot)
 		if (slot) {
 			tmp0 = AS_UINT32(slot + (i * 2) * 0x4);
 			tmp1 = AS_UINT32(slot + (i * 2 + 1) * 0x4);
+			if (dsi->slave_dsi) {
+				tmp2 = AS_UINT32(slot + (i * 2 + 8) * 0x4);
+				tmp3 = AS_UINT32(slot + (i * 2 + 9) * 0x4);
+			}
 		} else if (i == 0) {
 			tmp0 = readl(dsi->regs + DSI_RX_DATA0);
 			tmp1 = readl(dsi->regs + DSI_RX_DATA1);
+			if (dsi->slave_dsi) {
+				tmp2 = readl(dsi->slave_dsi->regs + DSI_RX_DATA0);
+				tmp3 = readl(dsi->slave_dsi->regs + DSI_RX_DATA1);
+			}
 		}
 
 		lcm_esd_tb = &params->lcm_esd_check_table[i];
@@ -3577,15 +3632,28 @@ int mtk_dsi_esd_cmp(struct mtk_ddp_comp *comp, void *handle, void *slot)
 		else
 			chk_val = (tmp0 >> 8) & 0xff;
 
+		if (dsi->slave_dsi) {
+			if ((tmp2 & 0xff) == 0x1C)
+				chk_val1 = tmp3 & 0xff;
+			else
+				chk_val1 = (tmp2 >> 8) & 0xff;
+		}
+
 		if (lcm_esd_tb->mask_list[0])
 			chk_val = chk_val & lcm_esd_tb->mask_list[0];
+		if (dsi->slave_dsi && lcm_esd_tb->mask_list[0])
+			chk_val1 = chk_val1 & lcm_esd_tb->mask_list[0];
 
-		if (chk_val == lcm_esd_tb->para_list[0]) {
+		DDPINFO("esd read reg:0x%x dsi0:0x%x dsi1:0x%x\n",
+			 lcm_esd_tb->cmd, chk_val, chk_val1);
+		if (chk_val == lcm_esd_tb->para_list[0] ||
+		    (dsi->slave_dsi && chk_val1 == lcm_esd_tb->para_list[0])) {
 			ret = 0;
 		} else {
-			DDPPR_ERR("[DSI]cmp fail:read(0x%x)!=expect(0x%x)\n",
-				  chk_val, lcm_esd_tb->para_list[0]);
-			ret = -1;
+			DDPPR_ERR("[DSI]esd cmp fail:dsi0(0x%x),dsi1(0x%x)!=expect(0x%x)\n",
+				  chk_val, chk_val1,
+				  lcm_esd_tb->para_list[0]);
+			ret = 1;
 			break;
 		}
 	}

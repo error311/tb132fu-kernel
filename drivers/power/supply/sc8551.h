@@ -1,25 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Copyright (c) 2022 Southchip Semiconductor Technology(Shanghai) Co., Ltd.
- */
+
 #ifndef __SC8551_HEADER__
 #define __SC8551_HEADER__
-
-enum {
-	/* sc8551 */
-	POWER_SUPPLY_PROP_SC_BUS_VOLTAGE = 200,
-	POWER_SUPPLY_PROP_SC_BUS_CURRENT,
-	POWER_SUPPLY_PROP_SC_BUS_TEMPERATURE,
-	POWER_SUPPLY_PROP_SC_VBUS_PRESENT,
-	POWER_SUPPLY_PROP_SC_VBUS_ERROR_STATUS,
-	POWER_SUPPLY_PROP_SC_BATTERY_PRESENT,
-	POWER_SUPPLY_PROP_SC_BATTERY_VOLTAGE,
-	POWER_SUPPLY_PROP_SC_BATTERY_CURRENT,
-	POWER_SUPPLY_PROP_SC_BATTERY_TEMPERATURE,
-	POWER_SUPPLY_PROP_SC_ALARM_STATUS,
-	POWER_SUPPLY_PROP_SC_FAULT_STATUS,
-	POWER_SUPPLY_PROP_SC_DIE_TEMPERATURE,
-};
 
 /* Register 00h */
 #define SC8551_REG_00					0x00
@@ -462,7 +443,7 @@ enum {
 
 #define SC8551_ADC_RATE_MASK				0x40
 #define SC8551_ADC_RATE_SHIFT				6
-#define SC8551_ADC_RATE_CONTINUOUS			0
+#define SC8551_ADC_RATE_CONTINOUS			0
 #define SC8551_ADC_RATE_ONESHOT				1
 
 #define SC8551_IBUS_ADC_DIS_MASK			0x01
@@ -515,7 +496,7 @@ enum {
 /* Register 16h */
 #define SC8551_REG_16						0x16
 #define SC8551_IBUS_POL_H_MASK				0x0F
-#define SC8551_IBUS_ADC_LSB				    (15625 / 10000)
+#define SC8551_IBUS_ADC_LSB				    15625 / 10000
 
 /* Register 17h */
 #define SC8551_REG_17						0x17
@@ -524,7 +505,7 @@ enum {
 /* Register 18h */
 #define SC8551_REG_18						0x18
 #define SC8551_VBUS_POL_H_MASK				0x0F
-#define SC8551_VBUS_ADC_LSB					(375 / 100)
+#define SC8551_VBUS_ADC_LSB					375 / 100
 
 /* Register 19h */
 #define SC8551_REG_19						0x19
@@ -542,7 +523,7 @@ enum {
 /* Register 1Ch */
 #define SC8551_REG_1C						0x1C
 #define SC8551_VOUT_POL_H_MASK				0x0F
-#define SC8551_VOUT_ADC_LSB					(125 / 100)
+#define SC8551_VOUT_ADC_LSB					125 / 100
 
 /* Register 1Dh */
 #define SC8551_REG_1D						0x1D
@@ -551,7 +532,7 @@ enum {
 /* Register 1Eh */
 #define SC8551_REG_1E						0x1E
 #define SC8551_VBAT_POL_H_MASK				0x0F
-#define SC8551_VBAT_ADC_LSB					(125 / 100)
+#define SC8551_VBAT_ADC_LSB 				125 / 100
 
 /* Register 1Fh */
 #define SC8551_REG_1F						0x1F
@@ -560,7 +541,7 @@ enum {
 /* Register 20h */
 #define SC8551_REG_20						0x20
 #define SC8551_IBAT_POL_H_MASK				0x0F
-#define SC8551_IBAT_ADC_LSB					(3125 / 1000)
+#define SC8551_IBAT_ADC_LSB 				3125 / 1000
 
 /* Register 21h */
 #define SC8551_REG_21						0x21
@@ -569,7 +550,7 @@ enum {
 /* Register 22h */
 #define SC8551_REG_22						0x22
 #define SC8551_TSBUS_POL_H_MASK				0x03
-#define SC8551_TSBUS_ADC_LSB				(9766 / 100000)
+#define SC8551_TSBUS_ADC_LSB 				9766 / 100000
 
 /* Register 23h */
 #define SC8551_REG_23						0x23
@@ -578,7 +559,7 @@ enum {
 /* Register 24h */
 #define SC8551_REG_24						0x24
 #define SC8551_TSBAT_POL_H_MASK				0x03
-#define SC8551_TSBAT_ADC_LSB				(9766 / 100000)
+#define SC8551_TSBAT_ADC_LSB 				9766 / 100000
 
 /* Register 25h */
 #define SC8551_REG_25						0x25
@@ -587,7 +568,7 @@ enum {
 /* Register 26h */
 #define SC8551_REG_26						0x26
 #define SC8551_TDIE_POL_H_MASK				0x01
-#define SC8551_TDIE_ADC_LSB					(5 / 10)
+#define SC8551_TDIE_ADC_LSB 				5 / 10
 
 /* Register 27h */
 #define SC8551_REG_27						0x27
@@ -612,8 +593,7 @@ enum {
 #define SC8551_TDIE_ALM_MASK				0xFF
 #define SC8551_TDIE_ALM_SHIFT				0
 #define SC8551_TDIE_ALM_BASE				25
-/*careful multiply is used for calc*/
-#define SC8551_TDIE_ALM_LSB					5
+#define SC8551_TDIE_ALM_LSB					5 /*careful multiply is used for calc*/
 
 
 /* Register 2Bh */
@@ -713,7 +693,7 @@ enum {
 #define SC8551_IBUS_REG_MASK                0x0F
 #define SC8551_IBUS_REG_SHIFT				0
 #define SC8551_IBUS_REG_BASE				1000
-#define SC8551_IBUS_REG_LSB					250
+#define SC8551_IBUS_REG_LSB					250 
 
 #define SC8551_REG_31						0x31
 #define SC8551_CHARGE_MODE_MASK				0x01

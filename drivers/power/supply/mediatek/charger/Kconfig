@@ -206,6 +206,12 @@ config CHARGER_BQ25601
 	  and config MTK_SWCHR_SUPPORT
 	  Set to Yes if BQ25601 is used.
 
+config CHARGER_CTN730
+	bool "Lenovo TB132FU CTN730 stylus charger"
+	help
+	  Enable the NXP CTN730 wireless stylus charger used by the
+	  Lenovo TB132FU.
+
 config MOTO_BQ25890_MIVR_DISABLE
 	bool "MOTO_BQ25890_MIVR_DISABLE"
 	depends on CHARGER_BQ25890

@@ -1769,6 +1769,15 @@ static void mt_remove(struct hid_device *hdev)
  * So there is no point in adding here any device with MT_CLS_DEFAULT.
  */
 static const struct hid_device_id mt_devices[] = {
+	/* Lenovo TB132FU keyboard cover and integrated touchpad. */
+	{ .driver_data = MT_CLS_DEFAULT,
+		HID_DEVICE(BUS_I2C, HID_GROUP_ANY,
+			I2C_VENDOR_ID_HT32F5_KEY,
+			I2C_PRODUCT_ID_HT32F5_KEY) },
+	{ .driver_data = MT_CLS_DEFAULT,
+		HID_DEVICE(BUS_I2C, HID_GROUP_ANY,
+			I2C_VENDOR_ID_HT32F5_MOUSE,
+			I2C_PRODUCT_ID_HT32F5_MOUSE) },
 
 	/* 3M panels */
 	{ .driver_data = MT_CLS_3M,

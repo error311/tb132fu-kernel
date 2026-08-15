@@ -609,6 +609,17 @@ config CHARGER_SC8551
 	  SC8551 charger IC Battery Charger. The base name for this driver is
 	  'sc8551.c'.
 
+config CHARGER_LN8000
+	tristate "Lion Semiconductor LN8000 battery charger driver"
+	depends on I2C
+	help
+	  Enable the alternate LN8000 charge-pump fitted to some Lenovo
+	  TB132FU board revisions.
+
+config CHARGER_TB132FU_PD_POLICY
+	bool
+	default y if CHARGER_SC8551 || CHARGER_LN8000
+
 config CHARGER_SMB347
 	tristate "Summit Microelectronics SMB347 Battery Charger"
 	depends on I2C

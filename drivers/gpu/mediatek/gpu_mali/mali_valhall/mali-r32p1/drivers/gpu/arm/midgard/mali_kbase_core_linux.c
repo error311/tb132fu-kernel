@@ -417,6 +417,8 @@ static int kbase_api_handshake(struct kbase_file *kfile,
 			       struct kbase_ioctl_version_check *version)
 {
 	int err = 0;
+	u16 requested_major = version->major;
+	u16 requested_minor = version->minor;
 
 	switch (version->major) {
 	case BASE_UK_VERSION_MAJOR:
@@ -437,6 +439,10 @@ static int kbase_api_handshake(struct kbase_file *kfile,
 
 	/* save the proposed version number for later use */
 	err = kbase_file_set_api_version(kfile, version->major, version->minor);
+	dev_notice(kfile->kbdev->dev,
+		"TB132FU GPU handshake userspace %u.%u, kernel %u.%u, ret=%d\n",
+		requested_major, requested_minor, version->major, version->minor,
+		err);
 	if (unlikely(err))
 		return err;
 
@@ -676,6 +682,11 @@ static int kbase_file_create_kctx(struct kbase_file *const kfile,
 
 	/* if bad flags, will stay stuck in setup mode */
 	if (!kctx)
+		dev_err(kbdev->dev,
+			"TB132FU GPU context creation failed: flags=0x%lx api=%u.%u compat=%d\n",
+			(unsigned long)flags, KBASE_API_MAJ(kfile->api_version),
+			KBASE_API_MIN(kfile->api_version), in_compat_syscall());
+	if (!kctx)
 		return -ENOMEM;
 
 	if (kbdev->infinite_cache_active_default)
@@ -726,24 +737,35 @@ static int kbase_open(struct inode *inode, struct file *filp)
 
 	kbdev = kbase_find_device(iminor(inode));
 
-	if (!kbdev)
+	if (!kbdev) {
+		pr_err("TB132FU GPU open failed: no device for misc minor %u\n",
+			iminor(inode));
 		return -ENODEV;
+	}
 
 	/* Device-wide firmware load is moved here from probing to comply with
 	 * Android GKI vendor guideline.
 	 */
 	ret = kbase_device_firmware_init_once(kbdev);
-	if (ret)
+	if (ret) {
+		dev_err(kbdev->dev,
+			"TB132FU GPU open failed: firmware init ret=%d\n", ret);
 		goto out;
+	}
 
 	kfile = kbase_file_new(kbdev, filp);
 	if (!kfile) {
 		ret = -ENOMEM;
+		dev_err(kbdev->dev,
+			"TB132FU GPU open failed: file allocation ret=%d\n", ret);
 		goto out;
 	}
 
 	filp->private_data = kfile;
 	filp->f_mode |= FMODE_UNSIGNED_OFFSET;
+	dev_notice(kbdev->dev,
+		"TB132FU GPU open success: minor=%u pid=%d comm=%s\n",
+		iminor(inode), current->pid, current->comm);
 
 	return 0;
 
@@ -1677,6 +1699,11 @@ static long kbase_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct kbase_context *kctx = NULL;
 	struct kbase_device *kbdev = kfile->kbdev;
 	void __user *uarg = (void __user *)arg;
+
+	dev_notice_ratelimited(kbdev->dev,
+		"TB132FU GPU ioctl: cmd=0x%x nr=%u size=%u dir=%u setup=%d pid=%d comm=%s\n",
+		cmd, _IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd),
+		atomic_read(&kfile->setup_state), current->pid, current->comm);
 
 	/* Only these ioctls are available until setup is complete */
 	switch (cmd) {

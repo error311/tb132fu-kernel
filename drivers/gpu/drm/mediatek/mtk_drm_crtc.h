@@ -84,8 +84,9 @@ enum DISP_PMQOS_SLOT {
 #define DISP_SLOT_SUBTRACTOR_WHEN_FREE(n)                                      \
 	(DISP_SLOT_SUBTRACTOR_WHEN_FREE_BASE + (0x4 * (n)))
 #define DISP_SLOT_ESD_READ_BASE DISP_SLOT_SUBTRACTOR_WHEN_FREE(OVL_LAYER_NR)
+/* Reserve RX_DATA0/1 for both DSI hosts on dual-port panels. */
 #define DISP_SLOT_PMQOS_BW_BASE                                                \
-	(DISP_SLOT_ESD_READ_BASE + (ESD_CHECK_NUM * 2 * 0x4))
+	(DISP_SLOT_ESD_READ_BASE + (ESD_CHECK_NUM * 4 * 0x4))
 #define DISP_SLOT_PMQOS_BW(n) (DISP_SLOT_PMQOS_BW_BASE + ((n)*0x4))
 #define DISP_SLOT_RDMA_FB_IDX_BASE (DISP_SLOT_PMQOS_BW(BW_MODULE))
 #define DISP_SLOT_RDMA_FB_IDX (DISP_SLOT_RDMA_FB_IDX_BASE + 0x4)

@@ -27,5 +27,7 @@ obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= touchscreen/
 obj-$(CONFIG_INPUT_MISC)	+= misc/
 
 obj-$(CONFIG_INPUT_APMPOWER)	+= apm-power.o
+obj-$(CONFIG_INPUT_HALL_SENSOR)	+= tb132fu-hall.o
+obj-$(CONFIG_SAR_AW9610X)	+= sensors/aw9610x/
 
 obj-$(CONFIG_RMI4_CORE)		+= rmi4/

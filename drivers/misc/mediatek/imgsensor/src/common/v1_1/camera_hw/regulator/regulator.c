@@ -9,13 +9,9 @@
 static const int regulator_voltage[] = {
 	REGULATOR_VOLTAGE_0,
 	REGULATOR_VOLTAGE_1000,
-#ifdef CONFIG_MOT_LYRIQ
 	REGULATOR_VOLTAGE_1050,
-#endif
 	REGULATOR_VOLTAGE_1100,
-#ifdef CONFIG_MOT_LYRIQ
 	REGULATOR_VOLTAGE_1150,
-#endif
 	REGULATOR_VOLTAGE_1200,
 	REGULATOR_VOLTAGE_1210,
 	REGULATOR_VOLTAGE_1220,
@@ -149,6 +145,9 @@ static enum IMGSENSOR_RETURN regulator_set(
 			}
 			atomic_inc(enable_cnt);
 		} else {
+			if (atomic_read(enable_cnt) <= 0)
+				return IMGSENSOR_RETURN_SUCCESS;
+
 			if (regulator_is_enabled(pregulator))
 				PK_DBG("[regulator]%d is enabled\n", pin);
 
@@ -219,4 +218,3 @@ enum IMGSENSOR_RETURN imgsensor_hw_regulator_open(
 
 	return IMGSENSOR_RETURN_SUCCESS;
 }
-

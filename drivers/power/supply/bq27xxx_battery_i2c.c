@@ -170,7 +170,8 @@ static int bq27xxx_battery_i2c_probe(struct i2c_client *client,
 	di->id = num;
 	di->dev = &client->dev;
 	di->chip = id->driver_data;
-	di->name = name;
+	/* TB132FU userspace and the MTK battery bridge expect this exact name. */
+	di->name = "bq27541";
 
 	di->bus.read = bq27xxx_battery_i2c_read;
 	di->bus.write = bq27xxx_battery_i2c_write;

@@ -127,6 +127,12 @@
 #define S5K4H7LN_SENSOR_ID                        0x487B
 #define SENSOR_DRVNAME_S5K4H7LN_MIPI_RAW          "s5k4h7ln_mipi_raw"
 
+/* Lenovo TB132FU (Onyx) camera variants used by the stock kernel config. */
+#define HI1339_SENSOR_ID                          0x1339
+#define SENSOR_DRVNAME_HI1339_MIPI_RAW            "hi1339_mipi_raw"
+#define GC08A3_SENSOR_ID                          0x08A3
+#define SENSOR_DRVNAME_GC08A3_MIPI_RAW            "gc08a3_mipi_raw"
+
 
 
 #define S5K4H7_SENSOR_ID                        0x487B
@@ -404,7 +410,7 @@
 #define IMX616_SENSOR_ID                        0x0616
 #define OV48C_SENSOR_ID                         0x564843
 #define IMX355_SENSOR_ID                        0x0355
-#define OV13B10_SENSOR_ID                       0x560d42
+#define OV13B10_SENSOR_ID                       OV13B10LN_SENSOR_ID
 #define OV02B10_SENSOR_ID                       0x002b
 
 

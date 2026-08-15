@@ -45,6 +45,14 @@ struct moto_chg_tcmd_client {
 	int (*wls_en)(void *input, bool val);
 };
 
+#ifdef CONFIG_MOTO_CHG_TCMD_SUPPORT
 int moto_chg_tcmd_register(struct moto_chg_tcmd_client *client);
+#else
+static inline int
+moto_chg_tcmd_register(struct moto_chg_tcmd_client *client)
+{
+	return 0;
+}
+#endif
 int moto_chg_tcmd_get_client(struct moto_chg_tcmd_client **client, enum MOTO_CHG_TCMD_CLIENT_ID client_id);
 #endif

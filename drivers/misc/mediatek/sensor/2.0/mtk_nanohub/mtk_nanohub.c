@@ -116,7 +116,9 @@ static DEFINE_SPINLOCK(config_data_lock);
 static uint8_t scp_system_ready;
 static uint8_t scp_chre_ready;
 static struct mtk_nanohub_device *mtk_nanohub_dev;
+#ifdef CONFIG_MOTO_ALGO_PARAMS
 static struct mot_params *motparams;//moto add
+#endif
 
 static int mtk_nanohub_send_timestamp_to_hub(void);
 static int mtk_nanohub_server_dispatch_data(uint32_t *currWp);
@@ -3143,7 +3145,9 @@ static int mtk_nanohub_probe(struct platform_device *pdev)
 		goto exit_attr;
 	}
 //moto add
+#ifdef CONFIG_MOTO_ALGO_PARAMS
 	motparams = kzalloc(sizeof(struct mot_params), GFP_KERNEL);
+#endif
 
 	pr_info("init done, data_unit_t:%d, SCP_SENSOR_HUB_DATA:%d\n",
 		(int)sizeof(struct data_unit_t),

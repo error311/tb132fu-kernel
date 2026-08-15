@@ -3232,4 +3232,3 @@ int mtk_disp_ioctl_debug_log_switch(struct drm_device *dev, void *data,
 		g_irq_log = 1;
 	return 0;
 }
-

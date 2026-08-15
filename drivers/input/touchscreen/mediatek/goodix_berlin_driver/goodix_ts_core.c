@@ -52,6 +52,16 @@ static unsigned char pen_buffer_wp;
 struct goodix_module goodix_modules;
 int core_module_prob_sate = CORE_MODULE_UNPROBED;
 
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+static int pen_attached;
+static bool support_pen;
+extern int is_stylus_attached(void);
+extern int ctn730_notifier_register(struct notifier_block *nb);
+extern int ctn730_notifier_unregister(struct notifier_block *nb);
+static void goodix_ts_pen_on(struct goodix_ts_core *core_data);
+static void goodix_ts_pen_off(struct goodix_ts_core *core_data);
+#endif
+
 static int goodix_send_ic_config(struct goodix_ts_core *cd, int type);
 
 
@@ -798,6 +808,39 @@ static ssize_t goodix_ts_debug_log_store(struct device *dev,
 	return count;
 }
 
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+static ssize_t goodix_ts_support_pen_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "state:%s\n",
+			 support_pen ? "enabled" : "disabled");
+}
+
+static ssize_t goodix_ts_support_pen_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
+	bool enabled;
+	int ret;
+
+	ret = kstrtobool(buf, &enabled);
+	if (ret)
+		return ret;
+
+	support_pen = enabled;
+	if (enabled) {
+		if (is_stylus_attached())
+			goodix_ts_pen_off(core_data);
+		else
+			goodix_ts_pen_on(core_data);
+	}
+	return count;
+}
+static DEVICE_ATTR(support_pen, 0664, goodix_ts_support_pen_show,
+		   goodix_ts_support_pen_store);
+#endif
+
 static DEVICE_ATTR(driver_info, 0440,
 		driver_info_show, NULL);
 static DEVICE_ATTR(chip_info, 0440,
@@ -827,6 +870,9 @@ static struct attribute *sysfs_attrs[] = {
 	&dev_attr_irq_info.attr,
 	&dev_attr_esd_info.attr,
 	&dev_attr_debug_log.attr,
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+	&dev_attr_support_pen.attr,
+#endif
 	NULL,
 };
 
@@ -1288,12 +1334,14 @@ static void tpd_rotate_180(int *x, int *y)
 }
 static void tpd_rotate_270(int *x, int *y)
 {
-	*y = SCREEN_MAX_Y + 1 - *y;
+	int raw_x = *x;
+	int raw_y = *y;
 
-	*x = (*x * SCREEN_MAX_Y) / SCREEN_MAX_X;
-	*y = (*y * SCREEN_MAX_X) / SCREEN_MAX_Y;
-
-	tpd_swap_xy(x, y);
+	/* Match Lenovo's 2025 TB132FU kernel: the controller already reports
+	 * native 2560x1536 coordinates, so rotate without rescaling either axis.
+	 */
+	*x = (SCREEN_MAX_Y - 1) - raw_y;
+	*y = raw_x;
 }
 #endif
 
@@ -2082,6 +2130,12 @@ static int goodix_ts_resume(struct goodix_ts_core *core_data)
 	mutex_unlock(&goodix_modules.mutex);
 
 out:
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+	if (pen_attached)
+		goodix_ts_pen_off(core_data);
+	else
+		goodix_ts_pen_on(core_data);
+#endif
 	/* enable irq */
 	hw_ops->irq_enable(core_data, true);
 	/* open esd */
@@ -2106,6 +2160,52 @@ void goodix_fb_ext_ctrl(int suspend)
 }
 EXPORT_SYMBOL(goodix_fb_ext_ctrl);
 */
+
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+static void goodix_ts_set_pen_mode(struct goodix_ts_core *core_data,
+				   bool enabled)
+{
+	struct goodix_ts_cmd cmd = { 0 };
+	int ret;
+
+	if (!core_data->board_data.pen_enable || !support_pen ||
+	    atomic_read(&core_data->suspended))
+		return;
+
+	cmd.len = 0x04;
+	cmd.cmd = enabled ? 0x14 : 0x15;
+	ret = core_data->hw_ops->send_cmd(core_data, &cmd);
+	if (ret < 0)
+		ts_info("failed to set pen mode %s", enabled ? "on" : "off");
+}
+
+static void goodix_ts_pen_on(struct goodix_ts_core *core_data)
+{
+	pen_attached = 0;
+	goodix_ts_set_pen_mode(core_data, true);
+}
+
+static void goodix_ts_pen_off(struct goodix_ts_core *core_data)
+{
+	pen_attached = 1;
+	goodix_ts_set_pen_mode(core_data, false);
+}
+
+static int goodix_ctn730_notifier_callback(struct notifier_block *self,
+					    unsigned long attached,
+					    void *data)
+{
+	struct goodix_ts_core *core_data = container_of(self,
+						struct goodix_ts_core,
+						ctn730_notifier);
+
+	if (attached)
+		goodix_ts_pen_off(core_data);
+	else
+		goodix_ts_pen_on(core_data);
+	return NOTIFY_OK;
+}
+#endif
 
 
 #if IS_ENABLED(CONFIG_FB)
@@ -2240,6 +2340,13 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 
 	/* inspect init */
 	inspect_module_init();
+
+#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+	cd->ctn730_notifier.notifier_call = goodix_ctn730_notifier_callback;
+	ret = ctn730_notifier_register(&cd->ctn730_notifier);
+	if (ret)
+		ts_info("Unable to register Goodix CTN730 notifier: %d", ret);
+#endif
 
 	return 0;
 exit:
@@ -2485,6 +2592,9 @@ static int goodix_ts_remove(struct platform_device *pdev)
 		hw_ops->irq_enable(core_data, false);
 	#if IS_ENABLED(CONFIG_FB)
 		fb_unregister_client(&core_data->fb_notifier);
+	#endif
+	#if IS_ENABLED(CONFIG_CHARGER_CTN730)
+		ctn730_notifier_unregister(&core_data->ctn730_notifier);
 	#endif
 		core_module_prob_sate = CORE_MODULE_REMOVED;
 		if (atomic_read(&core_data->ts_esd.esd_on))

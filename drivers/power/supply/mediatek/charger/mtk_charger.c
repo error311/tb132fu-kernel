@@ -80,6 +80,7 @@ __setup("androidboot.atm=", atm_mode_init);
 static struct charger_manager *pinfo;
 static struct list_head consumer_head = LIST_HEAD_INIT(consumer_head);
 static DEFINE_MUTEX(consumer_mutex);
+int g_sw_jeita_sm;
 
 struct tag_bootmode {
 	u32 size;
@@ -87,6 +88,39 @@ struct tag_bootmode {
 	u32 bootmode;
 	u32 boottype;
 };
+
+static int tb132fu_get_boot_mode(struct device *dev)
+{
+	struct device_node *boot_node = NULL;
+	const struct tag_bootmode *tag;
+	int boot_mode = UNKNOWN_BOOT;
+
+	if (dev && dev->of_node)
+		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
+	if (!boot_node)
+		boot_node = of_find_node_by_path("/chosen");
+	if (!boot_node) {
+		chr_err("%s: no boot-mode node\n", __func__);
+		return boot_mode;
+	}
+
+	tag = of_get_property(boot_node, "atag,boot", NULL);
+	if (tag)
+		boot_mode = tag->bootmode;
+	else
+		chr_err("%s: chosen node has no atag,boot\n", __func__);
+	of_node_put(boot_node);
+	if ((boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT ||
+	     boot_mode == LOW_POWER_OFF_CHARGING_BOOT) &&
+	    saved_command_line &&
+	    strstr(saved_command_line, "androidboot.force_normal_boot=1")) {
+		chr_err("%s: force-normal overrides stale KPOC mode %d\n",
+			__func__, boot_mode);
+		boot_mode = NORMAL_BOOT;
+	}
+
+	return boot_mode;
+}
 
 bool mtk_is_TA_support_pd_pps(struct charger_manager *pinfo)
 {
@@ -1100,6 +1134,8 @@ void sw_jeita_state_machine_init(struct charger_manager *info)
 		else
 			sw_jeita->sm = TEMP_BELOW_T0;
 
+		g_sw_jeita_sm = sw_jeita->sm;
+
 		chr_err("[SW_JEITA] tmp:%d sm:%d\n",
 			info->battery_temp, sw_jeita->sm);
 	}
@@ -1217,6 +1253,8 @@ void do_sw_jeita_state_machine(struct charger_manager *info)
 	} else {
 		sw_jeita->cv = 0;
 	}
+
+	g_sw_jeita_sm = sw_jeita->sm;
 
 	chr_err("[SW_JEITA]preState:%d newState:%d tmp:%d cv:%d\n",
 		sw_jeita->pre_sm, sw_jeita->sm, info->battery_temp,
@@ -1792,32 +1830,10 @@ static void mtk_battery_notify_check(struct charger_manager *info)
 
 static void check_battery_exist(struct charger_manager *info)
 {
-	struct device *dev = NULL;
-	struct device_node *boot_node = NULL;
-	struct tag_bootmode *tag = NULL;
 	unsigned int i = 0;
 	int count = 0;
-	int boot_mode = 11;//UNKNOWN_BOOT
-// workaround for mt6768 
-	//int boot_mode = get_boot_mode();
-	dev = &(info->pdev->dev);
-	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
-		if (!boot_node){
-			chr_err("%s: failed to get boot mode phandle\n", __func__);
-			return;
-		}
-		else {
-			tag = (struct tag_bootmode *)of_get_property(boot_node,
-								"atag,boot", NULL);
-			if (!tag){
-				chr_err("%s: failed to get atag,boot\n", __func__);
-				return;
-			}
-			else
-				boot_mode = tag->bootmode;
-		}
-	}
+	int boot_mode = tb132fu_get_boot_mode(&info->pdev->dev);
+
 	if (is_disable_charger())
 		return;
 
@@ -3376,28 +3392,7 @@ void mmi_init(struct charger_manager *info)
 static void kpoc_power_off_check(struct charger_manager *info)
 {
 	int vbus = 0;
-	struct device *dev = NULL;
-	struct device_node *boot_node = NULL;
-	struct tag_bootmode *tag = NULL;
-	int boot_mode = 11;//UNKNOWN_BOOT
-// workaround for mt6768 
-	//int boot_mode = get_boot_mode();
-	dev = &(info->pdev->dev);
-	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
-		if (!boot_node){
-			chr_err("%s: failed to get boot mode phandle\n", __func__);
-		}
-		else {
-			tag = (struct tag_bootmode *)of_get_property(boot_node,
-								"atag,boot", NULL);
-			if (!tag){
-				chr_err("%s: failed to get atag,boot\n", __func__);
-			}
-			else
-				boot_mode = tag->bootmode;
-		}
-	}
+	int boot_mode = tb132fu_get_boot_mode(&info->pdev->dev);
 
 	if (boot_mode == KERNEL_POWER_OFF_CHARGING_BOOT
 	    || boot_mode == LOW_POWER_OFF_CHARGING_BOOT) {
@@ -3551,7 +3546,8 @@ static int charger_routine_thread(void *arg)
 		charger_update_data(info);
 		check_battery_exist(info);
 		check_dynamic_mivr(info);
-		mmi_charger_check_status(info);
+		if (info->mmi.temp_zones)
+			mmi_charger_check_status(info);
 		charger_check_status(info);
 		#ifdef MTK_BASE
 		kpoc_power_off_check(info);
@@ -5679,31 +5675,10 @@ static int mtk_charger_probe(struct platform_device *pdev)
 	struct netlink_kernel_cfg cfg = {
 		.input = chg_nl_data_handler,
 	};
-	struct device *dev = NULL;
-	struct device_node *boot_node = NULL;
-	struct tag_bootmode *tag = NULL;
-	int boot_mode = 11;//UNKNOWN_BOOT
+	int boot_mode;
 	
 	chr_err("%s: starts\n", __func__);
-	
-	// workaround for mt6768 
-	//int boot_mode = get_boot_mode();
-	dev = &(pdev->dev);
-	if (dev != NULL){
-		boot_node = of_parse_phandle(dev->of_node, "bootmode", 0);
-		if (!boot_node){
-			chr_err("%s: failed to get boot mode phandle\n", __func__);
-		}
-		else {
-			tag = (struct tag_bootmode *)of_get_property(boot_node,
-								"atag,boot", NULL);
-			if (!tag){
-				chr_err("%s: failed to get atag,boot\n", __func__);
-			}
-			else
-				boot_mode = tag->bootmode;
-		}
-	}
+	boot_mode = tb132fu_get_boot_mode(&pdev->dev);
 
 	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
 

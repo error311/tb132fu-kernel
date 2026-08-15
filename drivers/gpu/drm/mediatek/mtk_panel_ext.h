@@ -10,7 +10,7 @@
 #include <drm/mediatek_drm.h>
 
 #define RT_MAX_NUM 10
-#define ESD_CHECK_NUM 3
+#define ESD_CHECK_NUM 4
 #define MAX_TX_CMD_NUM 20
 #define MAX_RX_CMD_NUM 20
 #define READ_DDIC_SLOT_NUM (4 * MAX_RX_CMD_NUM)

@@ -333,6 +333,19 @@ static enum power_supply_property battery_props[] = {
 	POWER_SUPPLY_PROP_AGE,
 };
 
+static int tb132fu_bq27541_get_property(enum power_supply_property psp,
+	union power_supply_propval *val)
+{
+	static struct power_supply *bq_psy;
+
+	if (!bq_psy)
+		bq_psy = power_supply_get_by_name("bq27541");
+	if (!bq_psy)
+		return -ENODEV;
+
+	return power_supply_get_property(bq_psy, psp, val);
+}
+
 static int battery_psy_get_property(struct power_supply *psy,
 	enum power_supply_property psp,
 	union power_supply_propval *val)
@@ -377,13 +390,16 @@ static int battery_psy_get_property(struct power_supply *psy,
 
 		if (gm->fixed_uisoc != 0xffff)
 			val->intval = gm->fixed_uisoc;
-		else
+		else if (tb132fu_bq27541_get_property(
+			POWER_SUPPLY_PROP_CAPACITY, val))
 			val->intval = bs_data->bat_capacity;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		val->intval =
-			gauge_get_int_property(GAUGE_PROP_BATTERY_CURRENT)
-			* 100;
+		if (tb132fu_bq27541_get_property(
+			POWER_SUPPLY_PROP_CURRENT_NOW, val))
+			val->intval =
+				gauge_get_int_property(GAUGE_PROP_BATTERY_CURRENT)
+				* 100;
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
 		val->intval =
@@ -401,13 +417,19 @@ static int battery_psy_get_property(struct power_supply *psy,
 				gm->battery_id].q_max * 1000 / 100;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		gauge_get_property(GAUGE_PROP_BATTERY_VOLTAGE,
-			&bs_data->bat_batt_vol);
-		val->intval = bs_data->bat_batt_vol * 1000;
+		if (tb132fu_bq27541_get_property(
+			POWER_SUPPLY_PROP_VOLTAGE_NOW, val)) {
+			gauge_get_property(GAUGE_PROP_BATTERY_VOLTAGE,
+				&bs_data->bat_batt_vol);
+			val->intval = bs_data->bat_batt_vol * 1000;
+		}
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		force_get_tbat(gm, true);
-		val->intval = gm->tbat_precise;
+		if (tb132fu_bq27541_get_property(
+			POWER_SUPPLY_PROP_TEMP, val)) {
+			force_get_tbat(gm, true);
+			val->intval = gm->tbat_precise;
+		}
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
 		val->intval = check_cap_level(bs_data->bat_capacity);

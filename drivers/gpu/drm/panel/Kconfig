@@ -61,6 +61,15 @@ config DRM_PANEL_RAYDIUM_RM692H0
 	  The panel has a 2560(RGB)×1536 (WQXGA) resolution and uses
 	  24 bit per pixel.
 
+config DRM_PANEL_RM692H0_WQXGA_DSI_VDO_EDO
+	tristate "Lenovo TB132FU EDO RM6920H WQXGA DSI panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	help
+	  Enable the exact 2560x1536, 120 Hz EDO RM6920H panel driver
+	  carried by Lenovo's published TB132FU source.
+
 config DRM_PANEL_SAMSUNG_LD9040
 	tristate "Samsung LD9040 RGB/SPI panel"
 	depends on OF && SPI

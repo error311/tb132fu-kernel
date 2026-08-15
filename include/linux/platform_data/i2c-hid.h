@@ -36,6 +36,12 @@ struct i2c_hid_platform_data {
 	u16 hid_descriptor_address;
 	struct regulator_bulk_data supplies[2];
 	int post_power_delay_ms;
+	int mcu_en_gpio;
+	int mcu_rst_gpio;
+	int mcu_hall_int_gpio;
+	int pogo_sw_en_gpio;
 };
+
+void tb132fu_i2c_hid_set_cover_state(bool closed);
 
 #endif /* __LINUX_I2C_HID_H */

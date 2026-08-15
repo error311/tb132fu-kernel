@@ -21,9 +21,6 @@ enum IMGSENSOR_HW_PIN {
 	IMGSENSOR_HW_PIN_PDN,
 	IMGSENSOR_HW_PIN_RST,
 	IMGSENSOR_HW_PIN_AVDD,
-#ifndef CONFIG_MOT_LYRIQ
-        IMGSENSOR_HW_PIN_AFVDD,
-#endif
 #ifdef CONFIG_REGULATOR_RT5133
 	IMGSENSOR_HW_PIN_AVDD1,
 #endif
@@ -73,7 +70,11 @@ enum IMGSENSOR_HW_PIN_STATE {
 #define PDN         IMGSENSOR_HW_PIN_PDN
 #define RST         IMGSENSOR_HW_PIN_RST
 #define AVDD        IMGSENSOR_HW_PIN_AVDD
+#if defined(IMGSENSOR_MT6781) || defined(IMGSENSOR_MT6877) || defined(CONFIG_MOT_LYRIQ)
 #define AFVDD       IMGSENSOR_HW_PIN_AFVDD
+#else
+#define AFVDD       IMGSENSOR_HW_PIN_UNDEF
+#endif
 #ifdef CONFIG_REGULATOR_RT5133
 #define AVDD1        IMGSENSOR_HW_PIN_AVDD1
 #endif
@@ -87,10 +88,6 @@ enum IMGSENSOR_HW_PIN_STATE {
 #define DVDD_1V2_IN    IMGSENSOR_HW_PIN_DVDD_1V2_IN
 #endif
 #define VDD_None    IMGSENSOR_HW_PIN_NONE
-
-	/* For backward compatible */
-//#define AFVDD       IMGSENSOR_HW_PIN_UNDEF
-
 
 /* Voltage */
 #define Vol_Low   IMGSENSOR_HW_PIN_STATE_LEVEL_0
@@ -140,4 +137,3 @@ enum IMGSENSOR_I2C_DEV {
 };
 
 #endif
-

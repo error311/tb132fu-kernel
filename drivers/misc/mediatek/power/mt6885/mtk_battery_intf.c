@@ -9,6 +9,25 @@
 #include <mtk_gauge_class.h>
 #include <mtk_battery_internal.h>
 
+/* Lenovo's TB132FU uses the external BQ27541 as its authoritative gauge. */
+#define MTK_ENABLE_BQ27541
+
+static int tb132fu_bq27541_get_property(enum power_supply_property psp,
+	union power_supply_propval *value)
+{
+	struct power_supply *bq_psy;
+	int ret;
+
+	bq_psy = power_supply_get_by_name("bq27541");
+	if (!bq_psy)
+		return -ENODEV;
+
+	ret = power_supply_get_property(bq_psy, psp, value);
+	power_supply_put(bq_psy);
+
+	return ret;
+}
+
 #ifdef CONFIG_CUSTOM_BATTERY_EXTERNAL_CHANNEL
 #include <custome_external_battery.h>
 #endif
@@ -91,15 +110,16 @@ signed int battery_get_bat_current(void)
 {
 	int curr_val;
 	bool is_charging;
-#if defined(CONFIG_MTK_DISABLE_GAUGE)  || defined(CONFIG_BATTERY_MM8013)
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(CONFIG_BATTERY_MM8013) || \
+	defined(MTK_ENABLE_BQ27541)
 	union power_supply_propval value;
+	int ret;
 
-	/* get battery current from external "battery" power supply if support */
-	struct power_supply *ba_psy = power_supply_get_by_name("battery");
-
-	if (ba_psy) {
-		power_supply_get_property(ba_psy, POWER_SUPPLY_PROP_CURRENT_NOW, &value);
-		pr_info("%s:get ba_psy success, bat_current(%d)\n",__func__, value.intval);
+	ret = tb132fu_bq27541_get_property(POWER_SUPPLY_PROP_CURRENT_NOW,
+		&value);
+	if (!ret) {
+		pr_info("%s:get bq_psy success, bat_current(%d)\n",
+			__func__, value.intval);
 		return value.intval;
 	}
 #endif
@@ -119,15 +139,15 @@ signed int battery_get_soc(void)
 {
 	struct mtk_battery *gm = get_mtk_battery();
 
-#if defined(CONFIG_MTK_DISABLE_GAUGE)  || defined(CONFIG_BATTERY_MM8013)
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(CONFIG_BATTERY_MM8013) || \
+	defined(MTK_ENABLE_BQ27541)
 	union power_supply_propval value;
+	int ret;
 
-	/* get battery current from external "battery" power supply if support */
-	struct power_supply *ba_psy = power_supply_get_by_name("battery");
-
-	if (ba_psy) {
-		power_supply_get_property(ba_psy, POWER_SUPPLY_PROP_CAPACITY, &value);
-		pr_info("%s:get ba_psy success, soc(%d)\n",__func__, value.intval);
+	ret = tb132fu_bq27541_get_property(POWER_SUPPLY_PROP_CAPACITY, &value);
+	if (!ret) {
+		pr_info("%s:get bq_psy success, soc(%d)\n",
+			__func__, value.intval);
 		return value.intval;
 	}
 #endif
@@ -141,17 +161,20 @@ signed int battery_get_soc(void)
 signed int battery_get_uisoc(void)
 {
 	struct mtk_battery *gm = get_mtk_battery();
-
-#if defined(CONFIG_MTK_DISABLE_GAUGE)  || defined(CONFIG_BATTERY_MM8013)
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(CONFIG_BATTERY_MM8013) || \
+	defined(MTK_ENABLE_BQ27541)
 	union power_supply_propval value;
-	struct power_supply *ba_psy = power_supply_get_by_name("battery");
-	if (ba_psy) {
-		power_supply_get_property(ba_psy, POWER_SUPPLY_PROP_CAPACITY, &value);
-		pr_info("%s:get ba_psy success, ui_soc(%d)\n",__func__, value.intval);
-		return value.intval;
-	}
+	int ret;
 #endif
 
+	/*
+	 * This interface is called by dlpt_notify_thr before the MTK battery
+	 * device has probed.  battery_get_boot_mode() dereferences gm.gdev and
+	 * therefore is not safe this early.  gm itself is the static battery
+	 * object, so use its cached boot mode just as the original implementation
+	 * did.  The BQ power supply lookup below is safe before its own probe and
+	 * simply returns -ENODEV.
+	 */
 	if (gm != NULL) {
 		int boot_mode = gm->boot_mode;
 
@@ -160,27 +183,37 @@ signed int battery_get_uisoc(void)
 			(boot_mode == FACTORY_BOOT) ||
 			(boot_mode == ATE_FACTORY_BOOT))
 			return 75;
-		else if (boot_mode == 0)
-			return gm->ui_soc;
 	}
+
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(CONFIG_BATTERY_MM8013) || \
+	defined(MTK_ENABLE_BQ27541)
+	ret = tb132fu_bq27541_get_property(POWER_SUPPLY_PROP_CAPACITY, &value);
+	if (!ret) {
+		pr_info("%s:get bq_psy success, ui_soc(%d)\n",
+			__func__, value.intval);
+		return value.intval;
+	}
+#endif
+
+	if (gm != NULL)
+		return gm->ui_soc;
 
 	return 50;
 }
 
 signed int battery_get_bat_temperature(void)
 {
-#if defined(CONFIG_MTK_DISABLE_GAUGE)
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(MTK_ENABLE_BQ27541)
 	union power_supply_propval value;
+	int ret;
 
-	/* get battery current from external "battery" power supply if support */
-	struct power_supply *ba_psy = power_supply_get_by_name("battery");
-
-	if (ba_psy) {
-		power_supply_get_property(ba_psy, POWER_SUPPLY_PROP_TEMP, &value);
-		pr_info("%s:get ba_psy success, temp(%d)\n",__func__, value.intval);
-		if (value.intval >= 100)
+	ret = tb132fu_bq27541_get_property(POWER_SUPPLY_PROP_TEMP, &value);
+	if (!ret) {
+		pr_info("%s:get bq_psy success, temp(%d)\n",
+			__func__, value.intval);
+		/* Lenovo accepts either degrees C or power-supply deci-degrees C. */
+		if (value.intval >= 100 || value.intval <= -100)
 			value.intval /= 10;
-
 		return value.intval;
 	}
 #endif
@@ -206,15 +239,16 @@ signed int battery_get_bat_avg_current(void)
 {
 	bool valid;
 
-#if defined(CONFIG_MTK_DISABLE_GAUGE)  || defined(CONFIG_BATTERY_MM8013)
+#if defined(CONFIG_MTK_DISABLE_GAUGE) || defined(CONFIG_BATTERY_MM8013) || \
+	defined(MTK_ENABLE_BQ27541)
 		union power_supply_propval value;
+		int ret;
 
-		/* get battery current from external "battery" power supply if support */
-		struct power_supply *ba_psy = power_supply_get_by_name("battery");
-
-		if (ba_psy) {
-			power_supply_get_property(ba_psy, POWER_SUPPLY_PROP_CURRENT_AVG, &value);
-			pr_info("%s:get ba_psy success, bat_avg_current(%d)\n",__func__,
+		ret = tb132fu_bq27541_get_property(
+			POWER_SUPPLY_PROP_CURRENT_AVG, &value);
+		if (!ret) {
+			pr_info("%s:get bq_psy success, bat_avg_current(%d)\n",
+				__func__,
 				value.intval);
 			return value.intval;
 		}

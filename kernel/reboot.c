@@ -239,8 +239,23 @@ void migrate_to_reboot_cpu(void)
  *	Shutdown everything and perform a clean reboot.
  *	This is not safe to call in interrupt context.
  */
+#define TB132FU_DIAGNOSTIC_TRAP_RESTART 0
+
 void kernel_restart(char *cmd)
 {
+#if TB132FU_DIAGNOSTIC_TRAP_RESTART
+	/*
+	 * Diagnostic build: distinguish an orderly/software-requested reboot
+	 * from a TOPRGU or firmware watchdog reset.  Panic before notifier and
+	 * device shutdown so ramoops/expdb retain the requesting task and stack.
+	 */
+	pr_emerg("TB132FU: trapped kernel_restart request, cmd=%s\n",
+		 cmd ? cmd : "<null>");
+	dump_stack();
+	panic("TB132FU diagnostic: kernel_restart requested (%s)",
+	      cmd ? cmd : "null");
+#endif
+
 	kernel_restart_prepare(cmd);
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
@@ -282,8 +297,22 @@ EXPORT_SYMBOL_GPL(kernel_halt);
  *
  *	Shutdown everything and perform a clean system power_off.
  */
+#define TB132FU_DIAGNOSTIC_TRAP_POWER_OFF 0
+
 void kernel_power_off(void)
 {
+#if TB132FU_DIAGNOSTIC_TRAP_POWER_OFF
+	/*
+	 * Diagnostic build: the TB132FU goes black during early boot without
+	 * leaving a pstore/AEE exception.  Convert any orderly power-off request
+	 * into a panic before shutdown destroys the calling context, allowing the
+	 * MediaTek expdb recorder to preserve the exact caller and reason path.
+	 */
+	pr_emerg("TB132FU: trapped kernel_power_off request for AEE diagnosis\n");
+	dump_stack();
+	panic("TB132FU diagnostic: kernel_power_off requested");
+#endif
+
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	if (pm_power_off_prepare)
 		pm_power_off_prepare();

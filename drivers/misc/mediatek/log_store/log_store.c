@@ -34,7 +34,6 @@ static bool early_log_disable = false;
 struct proc_dir_entry *entry;
 static u32 last_boot_phase;
 
-
 #define EXPDB_PATH "/dev/block/by-name/expdb"
 
 #define LOG_BLOCK_SIZE (512)

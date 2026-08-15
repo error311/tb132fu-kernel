@@ -1,7 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2022 Southchip Semiconductor Technology(Shanghai) Co., Ltd.
- */
+ * SC8551 battery charging driver
+*/
 
 #define pr_fmt(fmt)	"[sc8551] %s: " fmt, __func__
 #include <linux/gpio.h>
@@ -27,7 +26,8 @@
 #include <linux/math64.h>
 #include "sc8551.h"
 
-enum {
+
+typedef enum {
 	ADC_IBUS,
 	ADC_VBUS,
 	ADC_VAC,
@@ -38,9 +38,9 @@ enum {
 	ADC_TBAT,
 	ADC_TDIE,
 	ADC_MAX_NUM,
-};
+}ADC_CH;
 
-#define SC8551_ROLE_STDALONE	0
+#define SC8551_ROLE_STDALONE   	0
 #define SC8551_ROLE_SLAVE		1
 #define SC8551_ROLE_MASTER		2
 
@@ -115,6 +115,46 @@ static int sc8551_mode_data[] = {
 #define VBAT_REG_STATUS_MASK		(1 << VBAT_REG_STATUS_SHIFT)
 #define IBAT_REG_STATUS_MASK		(1 << VBAT_REG_STATUS_SHIFT)
 
+#define sc_err(fmt, ...)								\
+do {											\
+	if (sc->mode == SC8551_ROLE_MASTER)						\
+		printk(KERN_ERR "[sc8551-MASTER]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else if (sc->mode == SC8551_ROLE_SLAVE)					\
+		printk(KERN_ERR "[sc8551-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else										\
+		printk(KERN_ERR "[sc8551-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+} while(0);
+
+#define sc_info(fmt, ...)								\
+do {											\
+	if (sc->mode == SC8551_ROLE_MASTER)						\
+		printk(KERN_INFO "[sc8551-MASTER]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else if (sc->mode == SC8551_ROLE_SLAVE)					\
+		printk(KERN_INFO "[sc8551-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else										\
+		printk(KERN_INFO "[sc8551-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+} while(0);
+
+#define sc_dbg(fmt, ...)								\
+do {											\
+	if (sc->mode == SC8551_ROLE_MASTER)						\
+		printk(KERN_DEBUG "[sc8551-MASTER]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else if (sc->mode == SC8551_ROLE_SLAVE)					\
+		printk(KERN_DEBUG "[sc8551-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
+	else										\
+		printk(KERN_DEBUG "[sc8551-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+} while(0);
+
+#if 0
+	#undef sc_info
+	#define sc_info sc_err
+
+	#undef sc_dbg
+	#define sc_dbg sc_err
+#endif
+
+/*end*/
+
 struct sc8551_cfg {
 	bool bat_ovp_disable;
 	bool bat_ocp_disable;
@@ -180,6 +220,7 @@ struct sc8551 {
 
 	bool is_sc8551;
 	int  vbus_error;
+	bool pps_supported;
 
 	/* ADC reading */
 	int vbat_volt;
@@ -252,7 +293,7 @@ static int __sc8551_read_byte(struct sc8551 *sc, u8 reg, u8 *data)
 
 	ret = i2c_smbus_read_byte_data(sc->client, reg);
 	if (ret < 0) {
-		pr_info("i2c read fail: can't read from reg 0x%02X\n", reg);
+		sc_err("i2c read fail: can't read from reg 0x%02X\n", reg);
 		return ret;
 	}
 
@@ -267,7 +308,7 @@ static int __sc8551_write_byte(struct sc8551 *sc, int reg, u8 val)
 
 	ret = i2c_smbus_write_byte_data(sc->client, reg, val);
 	if (ret < 0) {
-		pr_info("i2c write fail: can't write 0x%02X to reg 0x%02X: %d\n",
+		sc_err("i2c write fail: can't write 0x%02X to reg 0x%02X: %d\n",
 		       val, reg, ret);
 		return ret;
 	}
@@ -304,7 +345,7 @@ static int sc8551_write_byte(struct sc8551 *sc, u8 reg, u8 data)
 	return ret;
 }
 
-static int sc8551_update_bits(struct sc8551 *sc, u8 reg,
+static int sc8551_update_bits(struct sc8551*sc, u8 reg,
 				    u8 mask, u8 data)
 {
 	int ret;
@@ -316,7 +357,7 @@ static int sc8551_update_bits(struct sc8551 *sc, u8 reg,
 	mutex_lock(&sc->i2c_rw_lock);
 	ret = __sc8551_read_byte(sc, reg, &tmp);
 	if (ret) {
-		pr_info("Failed: reg=%02X, ret=%d\n", reg, ret);
+		sc_err("Failed: reg=%02X, ret=%d\n", reg, ret);
 		goto out;
 	}
 
@@ -325,7 +366,7 @@ static int sc8551_update_bits(struct sc8551 *sc, u8 reg,
 
 	ret = __sc8551_write_byte(sc, reg, tmp);
 	if (ret)
-		pr_info("Failed: reg=%02X, ret=%d\n", reg, ret);
+		sc_err("Failed: reg=%02X, ret=%d\n", reg, ret);
 
 out:
 	mutex_unlock(&sc->i2c_rw_lock);
@@ -336,7 +377,7 @@ out:
 
 static int sc8551_enable_charge(struct sc8551 *sc, bool enable)
 {
-	int ret;
+	int ret;	
 	u8 val;
 
 	if (enable)
@@ -346,7 +387,7 @@ static int sc8551_enable_charge(struct sc8551 *sc, bool enable)
 
 	val <<= SC8551_CHG_EN_SHIFT;
 
-	pr_info("sc8551 charger %s\n", enable == false ? "disable" : "enable");
+	sc_err("sc8551 charger %s\n", enable == false ? "disable" : "enable");
 	ret = sc8551_update_bits(sc, SC8551_REG_0C,
 				SC8551_CHG_EN_MASK, val);
 
@@ -360,7 +401,7 @@ static int sc8551_check_charge_enabled(struct sc8551 *sc, bool *enabled)
 	u8 val;
 
 	ret = sc8551_read_byte(sc, SC8551_REG_0C, &val);
-	pr_info(">>>reg [0x0c] = 0x%02x\n", val);
+	sc_info(">>>reg [0x0c] = 0x%02x\n", val);
 	if (!ret)
 		*enabled = !!(val & SC8551_CHG_EN_MASK);
 	return ret;
@@ -884,7 +925,7 @@ static int sc8551_set_adc_scanrate(struct sc8551 *sc, bool oneshot)
 	if (oneshot)
 		val = SC8551_ADC_RATE_ONESHOT;
 	else
-		val = SC8551_ADC_RATE_CONTINUOUS;
+		val = SC8551_ADC_RATE_CONTINOUS;
 
 	val <<= SC8551_ADC_RATE_SHIFT;
 
@@ -902,8 +943,7 @@ static int sc8551_get_adc_data(struct sc8551 *sc, int channel,  int *result)
 	u8 val_l, val_h;
 	u16 val;
 
-	if (channel >= ADC_MAX_NUM)
-		return 0;
+	if(channel >= ADC_MAX_NUM) return 0;
 
 	sc8551_enable_adc(sc, true);
 	msleep(20);
@@ -915,21 +955,15 @@ static int sc8551_get_adc_data(struct sc8551 *sc, int channel,  int *result)
 		return ret;
 	val = (val_h << 8) | val_l;
 
-	if (sc->is_sc8551) {
-		if (channel == ADC_IBUS)
-			val = val * SC8551_IBUS_ADC_LSB;
-		else if (channel == ADC_VBUS)
-			val = val * SC8551_VBUS_ADC_LSB;
-		else if (channel == ADC_VAC)
-			val = val * SC8551_VAC_ADC_LSB;
-		else if (channel == ADC_VOUT)
-			val = val * SC8551_VOUT_ADC_LSB;
-		else if (channel == ADC_VBAT)
-			val = val * SC8551_VBAT_ADC_LSB;
-		else if (channel == ADC_IBAT)
-			val = val * SC8551_IBAT_ADC_LSB;
-		else if (channel == ADC_TDIE)
-			val = val * SC8551_TDIE_ADC_LSB;
+	if(sc->is_sc8551)
+	{
+		if(channel == ADC_IBUS)				val = val * SC8551_IBUS_ADC_LSB;
+		else if(channel == ADC_VBUS)		val = val * SC8551_VBUS_ADC_LSB;
+		else if(channel == ADC_VAC)			val = val * SC8551_VAC_ADC_LSB;
+		else if(channel == ADC_VOUT)		val = val * SC8551_VOUT_ADC_LSB;
+		else if(channel == ADC_VBAT)		val = val * SC8551_VBAT_ADC_LSB;
+		else if(channel == ADC_IBAT)		val = val * SC8551_IBAT_ADC_LSB;
+		else if(channel == ADC_TDIE)		val = val * SC8551_TDIE_ADC_LSB;
 	}
 
 	*result = val;
@@ -1180,7 +1214,7 @@ static int sc8551_get_work_mode(struct sc8551 *sc, int *mode)
 	ret = sc8551_read_byte(sc, SC8551_REG_0C, &val);
 
 	if (ret) {
-		pr_info("Failed to read operation mode register\n");
+		sc_err("Failed to read operation mode register\n");
 		return ret;
 	}
 
@@ -1189,10 +1223,10 @@ static int sc8551_get_work_mode(struct sc8551 *sc, int *mode)
 		*mode = SC8551_ROLE_MASTER;
 	else if (val == SC8551_MS_SLAVE)
 		*mode = SC8551_ROLE_SLAVE;
-	else
+	else 
 		*mode = SC8551_ROLE_STDALONE;
 
-	pr_info("work mode:%s\n", *mode == SC8551_ROLE_STDALONE ? "Standalone" :
+	sc_info("work mode:%s\n", *mode == SC8551_ROLE_STDALONE ? "Standalone" :
 			(*mode == SC8551_ROLE_SLAVE ? "Slave" : "Master"));
 	return ret;
 }
@@ -1201,10 +1235,10 @@ static int sc8551_check_vbus_error_status(struct sc8551 *sc)
 {
 	int ret;
 	u8 data;
-
+	
 	ret = sc8551_read_byte(sc, SC8551_REG_0A, &data);
-	if (ret == 0) {
-		pr_info("vbus error >>>>%02x\n", data);
+	if(ret == 0){
+		sc_err("vbus error >>>>%02x\n", data);
 		sc->vbus_error = data;
 	}
 
@@ -1221,8 +1255,7 @@ static int sc8551_detect_device(struct sc8551 *sc)
 		sc->part_no = (data & SC8551_DEV_ID_MASK);
 		sc->part_no >>= SC8551_DEV_ID_SHIFT;
 	}
-	pr_info("%s:chip ID[%d]\n", __func__, data);
-
+	printk("%s:chip ID[%d]\n",__func__,data);
 	return ret;
 }
 
@@ -1261,98 +1294,97 @@ static int sc8551_parse_dt(struct sc8551 *sc, struct device *dev)
 	ret = of_property_read_u32(np, "sc,sc8551,bat-ovp-threshold",
 			&sc->cfg->bat_ovp_th);
 	if (ret) {
-		pr_info("failed to read bat-ovp-threshold\n");
+		sc_err("failed to read bat-ovp-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bat-ovp-alarm-threshold",
 			&sc->cfg->bat_ovp_alm_th);
 	if (ret) {
-		pr_info("failed to read bat-ovp-alarm-threshold\n");
+		sc_err("failed to read bat-ovp-alarm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bat-ocp-threshold",
 			&sc->cfg->bat_ocp_th);
 	if (ret) {
-		pr_info("failed to read bat-ocp-threshold\n");
+		sc_err("failed to read bat-ocp-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bat-ocp-alarm-threshold",
 			&sc->cfg->bat_ocp_alm_th);
 	if (ret) {
-		pr_info("failed to read bat-ocp-alarm-threshold\n");
+		sc_err("failed to read bat-ocp-alarm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bus-ovp-threshold",
 			&sc->cfg->bus_ovp_th);
 	if (ret) {
-		pr_info("failed to read bus-ovp-threshold\n");
+		sc_err("failed to read bus-ovp-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bus-ovp-alarm-threshold",
 			&sc->cfg->bus_ovp_alm_th);
 	if (ret) {
-		pr_info("failed to read bus-ovp-alarm-threshold\n");
+		sc_err("failed to read bus-ovp-alarm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bus-ocp-threshold",
 			&sc->cfg->bus_ocp_th);
 	if (ret) {
-		pr_info("failed to read bus-ocp-threshold\n");
+		sc_err("failed to read bus-ocp-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bus-ocp-alarm-threshold",
 			&sc->cfg->bus_ocp_alm_th);
 	if (ret) {
-		pr_info("failed to read bus-ocp-alarm-threshold\n");
+		sc_err("failed to read bus-ocp-alarm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bat-ucp-alarm-threshold",
 			&sc->cfg->bat_ucp_alm_th);
 	if (ret) {
-		pr_info("failed to read bat-ucp-alarm-threshold\n");
+		sc_err("failed to read bat-ucp-alarm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bat-therm-threshold",
 			&sc->cfg->bat_therm_th);
 	if (ret) {
-		pr_info("failed to read bat-therm-threshold\n");
+		sc_err("failed to read bat-therm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,bus-therm-threshold",
 			&sc->cfg->bus_therm_th);
 	if (ret) {
-		pr_info("failed to read bus-therm-threshold\n");
+		sc_err("failed to read bus-therm-threshold\n");
 		return ret;
 	}
 	ret = of_property_read_u32(np, "sc,sc8551,die-therm-threshold",
 			&sc->cfg->die_therm_th);
 	if (ret) {
-		pr_info("failed to read die-therm-threshold\n");
+		sc_err("failed to read die-therm-threshold\n");
 		return ret;
 	}
 
 	ret = of_property_read_u32(np, "sc,sc8551,ac-ovp-threshold",
 			&sc->cfg->ac_ovp_th);
 	if (ret) {
-		pr_info("failed to read ac-ovp-threshold\n");
+		sc_err("failed to read ac-ovp-threshold\n");
 		return ret;
 	}
 
 	ret = of_property_read_u32(np, "sc,sc8551,sense-resistor-mohm",
 			&sc->cfg->sense_r_mohm);
 	if (ret) {
-		pr_info("failed to read sense-resistor-mohm\n");
+		sc_err("failed to read sense-resistor-mohm\n");
 		return ret;
 	}
 
-#if defined(SC8551_CUSTOMER_SUPPORT)
-	sc->irq_gpio = devm_gpiod_get(sc->dev, "sc,sc8551,interrupt_gpios", GPIOD_IN);
-	if (IS_ERR(sc->irq_gpio))
+	/*sc->irq_gpio = devm_gpiod_get(sc->dev, "sc,sc8551,interrupt_gpios", GPIOD_IN);
+	if (IS_ERR(sc->irq_gpio)) {
 		return PTR_ERR(sc->irq_gpio);
-#endif
+	}*/
 	ret = of_get_named_gpio(np, "sc,sc8551,interrupt_gpios", 0);
 	if (ret < 0) {
-		pr_info("no intr_gpio info\n");
+		sc_err("no intr_gpio info\n");
 		return ret;
 	}
 	sc->irq_gpio = ret;
@@ -1366,103 +1398,103 @@ static int sc8551_init_protection(struct sc8551 *sc)
 	int ret;
 
 	ret = sc8551_enable_batovp(sc, !sc->cfg->bat_ovp_disable);
-	pr_info("%s bat ovp %s\n",
+	sc_info("%s bat ovp %s\n",
 		sc->cfg->bat_ovp_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_batocp(sc, !sc->cfg->bat_ocp_disable);
-	pr_info("%s bat ocp %s\n",
+	sc_info("%s bat ocp %s\n",
 		sc->cfg->bat_ocp_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_batovp_alarm(sc, !sc->cfg->bat_ovp_alm_disable);
-	pr_info("%s bat ovp alarm %s\n",
+	sc_info("%s bat ovp alarm %s\n",
 		sc->cfg->bat_ovp_alm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_batocp_alarm(sc, !sc->cfg->bat_ocp_alm_disable);
-	pr_info("%s bat ocp alarm %s\n",
+	sc_info("%s bat ocp alarm %s\n",
 		sc->cfg->bat_ocp_alm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_batucp_alarm(sc, !sc->cfg->bat_ucp_alm_disable);
-	pr_info("%s bat ocp alarm %s\n",
+	sc_info("%s bat ocp alarm %s\n",
 		sc->cfg->bat_ucp_alm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_busovp_alarm(sc, !sc->cfg->bus_ovp_alm_disable);
-	pr_info("%s bus ovp alarm %s\n",
+	sc_info("%s bus ovp alarm %s\n",
 		sc->cfg->bus_ovp_alm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_busocp(sc, !sc->cfg->bus_ocp_disable);
-	pr_info("%s bus ocp %s\n",
+	sc_info("%s bus ocp %s\n",
 		sc->cfg->bus_ocp_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_busocp_alarm(sc, !sc->cfg->bus_ocp_alm_disable);
-	pr_info("%s bus ocp alarm %s\n",
+	sc_info("%s bus ocp alarm %s\n",
 		sc->cfg->bus_ocp_alm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_bat_therm(sc, !sc->cfg->bat_therm_disable);
-	pr_info("%s bat therm %s\n",
+	sc_info("%s bat therm %s\n",
 		sc->cfg->bat_therm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_enable_bus_therm(sc, !sc->cfg->bus_therm_disable);
-	pr_info("%s bus therm %s\n",
+	sc_info("%s bus therm %s\n",
 		sc->cfg->bus_therm_disable ? "disable" : "enable",
 		!ret ? "successfullly" : "failed");
 
 	ret = sc8551_set_batovp_th(sc, sc->cfg->bat_ovp_th);
-	pr_info("set bat ovp th %d %s\n", sc->cfg->bat_ovp_th,
+	sc_info("set bat ovp th %d %s\n", sc->cfg->bat_ovp_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_batovp_alarm_th(sc, sc->cfg->bat_ovp_alm_th);
-	pr_info("set bat ovp alarm threshold %d %s\n", sc->cfg->bat_ovp_alm_th,
+	sc_info("set bat ovp alarm threshold %d %s\n", sc->cfg->bat_ovp_alm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_batocp_th(sc, sc->cfg->bat_ocp_th);
-	pr_info("set bat ocp threshold %d %s\n", sc->cfg->bat_ocp_th,
+	sc_info("set bat ocp threshold %d %s\n", sc->cfg->bat_ocp_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_batocp_alarm_th(sc, sc->cfg->bat_ocp_alm_th);
-	pr_info("set bat ocp alarm threshold %d %s\n", sc->cfg->bat_ocp_alm_th,
+	sc_info("set bat ocp alarm threshold %d %s\n", sc->cfg->bat_ocp_alm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_busovp_th(sc, sc->cfg->bus_ovp_th);
-	pr_info("set bus ovp threshold %d %s\n", sc->cfg->bus_ovp_th,
+	sc_info("set bus ovp threshold %d %s\n", sc->cfg->bus_ovp_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_busovp_alarm_th(sc, sc->cfg->bus_ovp_alm_th);
-	pr_info("set bus ovp alarm threshold %d %s\n", sc->cfg->bus_ovp_alm_th,
+	sc_info("set bus ovp alarm threshold %d %s\n", sc->cfg->bus_ovp_alm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_busocp_th(sc, sc->cfg->bus_ocp_th);
-	pr_info("set bus ocp threshold %d %s\n", sc->cfg->bus_ocp_th,
+	sc_info("set bus ocp threshold %d %s\n", sc->cfg->bus_ocp_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_busocp_alarm_th(sc, sc->cfg->bus_ocp_alm_th);
-	pr_info("set bus ocp alarm th %d %s\n", sc->cfg->bus_ocp_alm_th,
+	sc_info("set bus ocp alarm th %d %s\n", sc->cfg->bus_ocp_alm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_batucp_alarm_th(sc, sc->cfg->bat_ucp_alm_th);
-	pr_info("set bat ucp threshold %d %s\n", sc->cfg->bat_ucp_alm_th,
+	sc_info("set bat ucp threshold %d %s\n", sc->cfg->bat_ucp_alm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_bat_therm_th(sc, sc->cfg->bat_therm_th);
-	pr_info("set die therm threshold %d %s\n", sc->cfg->bat_therm_th,
+	sc_info("set die therm threshold %d %s\n", sc->cfg->bat_therm_th,
 		!ret ? "successfully" : "failed");
 	ret = sc8551_set_bus_therm_th(sc, sc->cfg->bus_therm_th);
-	pr_info("set bus therm threshold %d %s\n", sc->cfg->bus_therm_th,
+	sc_info("set bus therm threshold %d %s\n", sc->cfg->bus_therm_th,
 		!ret ? "successfully" : "failed");
 	ret = sc8551_set_die_therm_th(sc, sc->cfg->die_therm_th);
-	pr_info("set die therm threshold %d %s\n", sc->cfg->die_therm_th,
+	sc_info("set die therm threshold %d %s\n", sc->cfg->die_therm_th,
 		!ret ? "successfully" : "failed");
 
 	ret = sc8551_set_acovp_th(sc, sc->cfg->ac_ovp_th);
-	pr_info("set ac ovp threshold %d %s\n", sc->cfg->ac_ovp_th,
+	sc_info("set ac ovp threshold %d %s\n", sc->cfg->ac_ovp_th,
 		!ret ? "successfully" : "failed");
 
 	return 0;
@@ -1498,13 +1530,13 @@ static int sc8551_init_int_src(struct sc8551 *sc)
 		/*			| BAT_UCP_ALARM */
 					| BAT_OVP_ALARM);
 	if (ret) {
-		pr_info("failed to set alarm mask:%d\n", ret);
+		sc_err("failed to set alarm mask:%d\n", ret);
 		return ret;
 	}
-#if defined(SC8551_CUSTOMER_SUPPORT)
+#if 0
 	ret = sc8551_set_fault_int_mask(sc, TS_BUS_FAULT);
 	if (ret) {
-		pr_info("failed to set fault mask:%d\n", ret);
+		sc_err("failed to set fault mask:%d\n", ret);
 		return ret;
 	}
 #endif
@@ -1520,10 +1552,10 @@ static int sc8551_init_regulation(struct sc8551 *sc)
 	sc8551_set_vdrop_th(sc, 400);
 
 	sc8551_enable_regulation(sc, false);
-
+	
 	sc8551_write_byte(sc, SC8551_REG_2E, 0x08);
 	sc8551_update_bits(sc, SC8551_REG_34, 0x01, 0x01);
-
+	
 	return 0;
 }
 
@@ -1554,12 +1586,54 @@ static int sc8551_set_present(struct sc8551 *sc, bool present)
 	return 0;
 }
 
-#if defined(SC8551_CUSTOMER_SUPPORT)
+static ssize_t sc8551_show_registers(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct sc8551 *sc = dev_get_drvdata(dev);
+	u8 addr;
+	u8 val;
+	u8 tmpbuf[300];
+	int len;
+	int idx = 0;
+	int ret;
+
+	idx = snprintf(buf, PAGE_SIZE, "%s:\n", "sc8551");
+	for (addr = 0x0; addr <= 0x31; addr++) {
+		ret = sc8551_read_byte(sc, addr, &val);
+		if (ret == 0) {
+			len = snprintf(tmpbuf, PAGE_SIZE - idx,
+					"Reg[%.2X] = 0x%.2x\n", addr, val);
+			memcpy(&buf[idx], tmpbuf, len);
+			idx += len;
+		}
+	}
+
+	return idx;
+}
+
+static ssize_t sc8551_store_register(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct sc8551 *sc = dev_get_drvdata(dev);
+	int ret;
+	unsigned int reg;
+	unsigned int val;
+
+	ret = sscanf(buf, "%x %x", &reg, &val);
+	if (ret == 2 && reg <= 0x31)
+		sc8551_write_byte(sc, (unsigned char)reg, (unsigned char)val);
+
+	return count;
+}
+
+
+static DEVICE_ATTR(registers, 0660, sc8551_show_registers, sc8551_store_register);
+
 static void sc8551_create_device_node(struct device *dev)
 {
 	device_create_file(dev, &dev_attr_registers);
 }
-#endif
+
 
 static enum power_supply_property sc8551_charger_props[] = {
 	POWER_SUPPLY_PROP_PRESENT,
@@ -1578,8 +1652,10 @@ static enum power_supply_property sc8551_charger_props[] = {
 	POWER_SUPPLY_PROP_SC_ALARM_STATUS,
 	POWER_SUPPLY_PROP_SC_FAULT_STATUS,
 	POWER_SUPPLY_PROP_SC_VBUS_ERROR_STATUS,
-
+	POWER_SUPPLY_PROP_SC_PPS_SUPPORTED,
 };
+
+
 
 static void sc8551_check_alarm_status(struct sc8551 *sc);
 static void sc8551_check_fault_status(struct sc8551 *sc);
@@ -1593,38 +1669,38 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 	int ret;
 	u8 reg_val;
 
-	pr_debug(">>>>>psp = %d\n", psp);
+	sc_dbg(">>>>>psp = %d\n", psp);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
-		pr_debug("POWER_SUPPLY_PROP_CHARGING_ENABLED >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_CHARGING_ENABLED >>>>>psp = %d\n", psp);
 		sc8551_check_charge_enabled(sc, &sc->charge_enabled);
 		val->intval = sc->charge_enabled;
 		break;
 	case POWER_SUPPLY_PROP_STATUS:
-		pr_debug("POWER_SUPPLY_PROP_STATUS >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_STATUS >>>>>psp = %d\n", psp);
 		val->intval = 0;
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
-		pr_debug("POWER_SUPPLY_PROP_PRESENT >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_PRESENT >>>>>psp = %d\n", psp);
 		val->intval = sc->usb_present;
 		break;
 	case POWER_SUPPLY_PROP_SC_BATTERY_PRESENT:
-		pr_debug("POWER_SUPPLY_PROP_SC_BATTERY_PRESENT >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BATTERY_PRESENT >>>>>psp = %d\n", psp);
 		ret = sc8551_read_byte(sc, SC8551_REG_0D, &reg_val);
 		if (!ret)
 			sc->batt_present  = !!(reg_val & VBAT_INSERT);
 		val->intval = sc->batt_present;
 		break;
 	case POWER_SUPPLY_PROP_SC_VBUS_PRESENT:
-		pr_debug("POWER_SUPPLY_PROP_SC_VBUS_PRESENT >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_VBUS_PRESENT >>>>>psp = %d\n", psp);
 		ret = sc8551_read_byte(sc, SC8551_REG_0D, &reg_val);
 		if (!ret)
 			sc->vbus_present  = !!(reg_val & VBUS_INSERT);
 		val->intval = sc->vbus_present;
 		break;
 	case POWER_SUPPLY_PROP_SC_BATTERY_VOLTAGE:
-		pr_debug("POWER_SUPPLY_PROP_SC_BATTERY_VOLTAGE >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BATTERY_VOLTAGE >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_VOUT, &result);
 		if (!ret)
 			sc->vbat_volt = result;
@@ -1632,7 +1708,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->vbat_volt;
 		break;
 	case POWER_SUPPLY_PROP_SC_BATTERY_CURRENT:
-		pr_debug("POWER_SUPPLY_PROP_SC_BATTERY_CURRENT >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BATTERY_CURRENT >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_IBAT, &result);
 		if (!ret)
 			sc->ibat_curr = result;
@@ -1640,7 +1716,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->ibat_curr;
 		break;
 	case POWER_SUPPLY_PROP_SC_BATTERY_TEMPERATURE:
-		pr_debug("POWER_SUPPLY_PROP_SC_BATTERY_TEMPERATURE >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BATTERY_TEMPERATURE >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_TBAT, &result);
 		if (!ret)
 			sc->bat_temp = result;
@@ -1648,7 +1724,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->bat_temp;
 		break;
 	case POWER_SUPPLY_PROP_SC_BUS_VOLTAGE:
-		pr_debug("POWER_SUPPLY_PROP_SC_BUS_VOLTAGE >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BUS_VOLTAGE >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_VBUS, &result);
 		if (!ret)
 			sc->vbus_volt = result;
@@ -1656,7 +1732,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->vbus_volt;
 		break;
 	case POWER_SUPPLY_PROP_SC_BUS_CURRENT:
-		pr_debug("POWER_SUPPLY_PROP_SC_BUS_CURRENT >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BUS_CURRENT >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_IBUS, &result);
 		if (!ret)
 			sc->ibus_curr = result;
@@ -1664,7 +1740,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->ibus_curr;
 		break;
 	case POWER_SUPPLY_PROP_SC_BUS_TEMPERATURE:
-		pr_debug("POWER_SUPPLY_PROP_SC_BUS_TEMPERATURE >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_BUS_TEMPERATURE >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_TBUS, &result);
 		if (!ret)
 			sc->bus_temp = result;
@@ -1673,7 +1749,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 
 		break;
 	case POWER_SUPPLY_PROP_SC_DIE_TEMPERATURE:
-		pr_debug("POWER_SUPPLY_PROP_SC_DIE_TEMPERATURE >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_DIE_TEMPERATURE >>>>>psp = %d\n", psp);
 		ret = sc8551_get_adc_data(sc, ADC_TDIE, &result);
 		if (!ret)
 			sc->die_temp = result;
@@ -1681,7 +1757,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		val->intval = sc->die_temp;
 		break;
 	case POWER_SUPPLY_PROP_SC_ALARM_STATUS:
-		pr_debug("POWER_SUPPLY_PROP_SC_ALARM_STATUS >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_ALARM_STATUS >>>>>psp = %d\n", psp);
 		sc8551_check_alarm_status(sc);
 		val->intval = ((sc->bat_ovp_alarm << BAT_OVP_ALARM_SHIFT)
 			| (sc->bat_ocp_alarm << BAT_OCP_ALARM_SHIFT)
@@ -1694,7 +1770,7 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_SC_FAULT_STATUS:
-		pr_debug("POWER_SUPPLY_PROP_SC_FAULT_STATUS >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_FAULT_STATUS >>>>>psp = %d\n", psp);
 		sc8551_check_fault_status(sc);
 		val->intval = ((sc->bat_ovp_fault << BAT_OVP_FAULT_SHIFT)
 			| (sc->bat_ocp_fault << BAT_OCP_FAULT_SHIFT)
@@ -1706,10 +1782,14 @@ static int sc8551_charger_get_property(struct power_supply *psy,
 		break;
 
 	case POWER_SUPPLY_PROP_SC_VBUS_ERROR_STATUS:
-		pr_debug("POWER_SUPPLY_PROP_SC_VBUS_ERROR_STATUS >>>>>psp = %d\n", psp);
+		sc_dbg("POWER_SUPPLY_PROP_SC_VBUS_ERROR_STATUS >>>>>psp = %d\n", psp);
 		sc8551_check_vbus_error_status(sc);
 		val->intval = sc->vbus_error;
 
+		break;
+	case POWER_SUPPLY_PROP_SC_PPS_SUPPORTED:
+		sc_dbg("POWER_SUPPLY_PROP_SC_PPS_SUPPORTED >>>>>psp = %d\n", psp);
+		val->intval = sc->pps_supported;
 		break;
 	default:
 		return -EINVAL;
@@ -1725,18 +1805,22 @@ static int sc8551_charger_set_property(struct power_supply *psy,
 				       const union power_supply_propval *val)
 {
 	struct sc8551 *sc = power_supply_get_drvdata(psy);
-
+	
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
-	pr_debug("POWER_SUPPLY_PROP_CHARGING_ENABLED >>>>>prop = %d\n", prop);
+	sc_dbg("POWER_SUPPLY_PROP_CHARGING_ENABLED >>>>>prop = %d\n", prop);
 		sc8551_enable_charge(sc, val->intval);
 		sc8551_check_charge_enabled(sc, &sc->charge_enabled);
-		pr_info("POWER_SUPPLY_PROP_CHARGING_ENABLED: %s\n",
+		sc_info("POWER_SUPPLY_PROP_CHARGING_ENABLED: %s\n",
 				val->intval ? "enable" : "disable");
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
-	pr_debug("POWER_SUPPLY_PROP_PRESENT >>>>>prop = %d\n", prop);
+	sc_dbg("POWER_SUPPLY_PROP_PRESENT >>>>>prop = %d\n", prop);
 		sc8551_set_present(sc, !!val->intval);
+		break;
+	case POWER_SUPPLY_PROP_SC_PPS_SUPPORTED:
+	sc_dbg("POWER_SUPPLY_PROP_SC_PPS_SUPPORTED >>>>>prop = %d\n", prop);
+		sc->pps_supported = val->intval;
 		break;
 	default:
 		return -EINVAL;
@@ -1753,6 +1837,7 @@ static int sc8551_charger_is_writeable(struct power_supply *psy,
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+	case POWER_SUPPLY_PROP_SC_PPS_SUPPORTED:
 		ret = 1;
 		break;
 	default:
@@ -1785,14 +1870,14 @@ static int sc8551_psy_register(struct sc8551 *sc)
 	sc->psy_desc.property_is_writeable = sc8551_charger_is_writeable;
 
 
-	sc->fc2_psy = devm_power_supply_register(sc->dev,
+	sc->fc2_psy = devm_power_supply_register(sc->dev, 
 			&sc->psy_desc, &sc->psy_cfg);
 	if (IS_ERR(sc->fc2_psy)) {
-		pr_info("failed to register fc2_psy:%d\n", ret);
+		sc_err("failed to register fc2_psy:%d\n", ret);
 		return PTR_ERR(sc->fc2_psy);
 	}
 
-	pr_info("%s power supply register successfully\n", sc->psy_desc.name);
+	sc_info("%s power supply register successfully\n", sc->psy_desc.name);
 
 	return 0;
 }
@@ -1801,61 +1886,63 @@ static irqreturn_t sc8551_charger_interrupt(int irq, void *dev_id);
 static int sc8551_init_irq(struct sc8551 *sc)
 {
 	int ret;
-
+	
 	gpio_free(sc->irq_gpio);
-
-	pr_info(">>>>>>>>>>>>%d\n", sc->irq_gpio);
+	
+	sc_err(">>>>>>>>>>>>%d\n", sc->irq_gpio);
 	ret = gpio_request(sc->irq_gpio, "sc8551");
 	if (ret < 0) {
-		pr_info("fail to request GPIO(%d)   %d\n", sc->irq_gpio, ret);
+		sc_err("fail to request GPIO(%d)   %d\n", sc->irq_gpio, ret);
 		return ret;
 	}
-
+	
 	ret = gpio_direction_input(sc->irq_gpio);
 	if (ret < 0) {
-		pr_info("fail to set GPIO%d as input pin(%d)\n", sc->irq_gpio, ret);
+		sc_err("fail to set GPIO%d as input pin(%d)\n", sc->irq_gpio, ret);
 		return ret;
 	}
-
+	
 	sc->irq = gpio_to_irq(sc->irq_gpio);
 	if (sc->irq <= 0) {
-		pr_info("irq mapping fail\n");
+		sc_err("irq mapping fail\n");
 		return 0;
 	}
-
-	pr_info("irq : %d\n",  sc->irq);
-
+	
+	sc_info("irq : %d\n",  sc->irq);
+	
 	if (sc->mode == SC8551_ROLE_MASTER) {
 		ret = devm_request_threaded_irq(sc->dev, sc->irq,
 			NULL, sc8551_charger_interrupt,
 			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			"sc8551 master irq", sc);
 		if (ret < 0) {
-			pr_info("request irq for irq=%d failed, ret =%d\n",
+			sc_err("request irq for irq=%d failed, ret =%d\n",
 							sc->irq, ret);
 		}
-	} else if (sc->mode == SC8551_ROLE_SLAVE) {
+	}
+	else if (sc->mode == SC8551_ROLE_SLAVE) {
 		ret = devm_request_threaded_irq(sc->dev, sc->irq,
 			NULL, sc8551_charger_interrupt,
 			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			"sc8551 slave irq", sc);
 		if (ret < 0) {
-			pr_info("request irq for isrq=%d failed, ret =%d\n",
+			sc_err("request irq for isrq=%d failed, ret =%d\n",
 							sc->irq, ret);
 		}
-	} else {
+	}
+	else {
 		ret = devm_request_threaded_irq(sc->dev, sc->irq,
 			NULL, sc8551_charger_interrupt,
 			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			"sc8551 standalone irq", sc);
 		if (ret < 0) {
-			pr_info("request irq for irq=%d failed, ret =%d\n",
+			sc_err("request irq for irq=%d failed, ret =%d\n",
 							sc->irq, ret);
 		}
 	}
-
+	
 	enable_irq_wake(sc->irq);
-
+	
 	device_init_wakeup(sc->dev, 1);
 
 	return 0;
@@ -1871,22 +1958,22 @@ static void sc8551_check_alarm_status(struct sc8551 *sc)
 
 	ret = sc8551_read_byte(sc, SC8551_REG_08, &flag);
 	if (!ret && (flag & SC8551_IBUS_UCP_FALL_FLAG_MASK))
-		pr_debug("UCP_FLAG =0x%02X\n",
+		sc_dbg("UCP_FLAG =0x%02X\n",
 			!!(flag & SC8551_IBUS_UCP_FALL_FLAG_MASK));
 
 	ret = sc8551_read_byte(sc, SC8551_REG_2D, &flag);
 	if (!ret && (flag & SC8551_VDROP_OVP_FLAG_MASK))
-		pr_debug("VDROP_OVP_FLAG =0x%02X\n",
+		sc_dbg("VDROP_OVP_FLAG =0x%02X\n",
 			!!(flag & SC8551_VDROP_OVP_FLAG_MASK));
 
 	/*read to clear alarm flag*/
 	ret = sc8551_read_byte(sc, SC8551_REG_0E, &flag);
 	if (!ret && flag)
-		pr_debug("INT_FLAG =0x%02X\n", flag);
+		sc_dbg("INT_FLAG =0x%02X\n", flag);
 
 	ret = sc8551_read_byte(sc, SC8551_REG_0D, &stat);
 	if (!ret && stat != sc->prev_alarm) {
-		pr_debug("INT_STAT = 0X%02x\n", stat);
+		sc_dbg("INT_STAT = 0X%02x\n", stat);
 		sc->prev_alarm = stat;
 		sc->bat_ovp_alarm = !!(stat & BAT_OVP_ALARM);
 		sc->bat_ocp_alarm = !!(stat & BAT_OCP_ALARM);
@@ -1900,11 +1987,11 @@ static void sc8551_check_alarm_status(struct sc8551 *sc)
 
 	ret = sc8551_read_byte(sc, SC8551_REG_08, &stat);
 	if (!ret && (stat & 0x50))
-		pr_info("Reg[05]BUS_UCPOVP = 0x%02X\n", stat);
+		sc_err("Reg[05]BUS_UCPOVP = 0x%02X\n", stat);
 
 	ret = sc8551_read_byte(sc, SC8551_REG_0A, &stat);
 	if (!ret && (stat & 0x02))
-		pr_info("Reg[0A]CONV_OCP = 0x%02X\n", stat);
+		sc_err("Reg[0A]CONV_OCP = 0x%02X\n", stat);
 
 	mutex_unlock(&sc->data_lock);
 }
@@ -1917,14 +2004,14 @@ static void sc8551_check_fault_status(struct sc8551 *sc)
 	bool changed = false;
 
 	mutex_lock(&sc->data_lock);
-
+	
 	ret = sc8551_read_byte(sc, SC8551_REG_10, &stat);
 	if (!ret && stat)
-		pr_info("FAULT_STAT = 0x%02X\n", stat);
+		sc_err("FAULT_STAT = 0x%02X\n", stat);
 
 	ret = sc8551_read_byte(sc, SC8551_REG_11, &flag);
 	if (!ret && flag)
-		pr_info("FAULT_FLAG = 0x%02X\n", flag);
+		sc_err("FAULT_FLAG = 0x%02X\n", flag);
 
 	if (!ret && flag != sc->prev_fault) {
 		changed = true;
@@ -1943,8 +2030,7 @@ static void sc8551_check_fault_status(struct sc8551 *sc)
 	mutex_unlock(&sc->data_lock);
 }
 
-#if defined(SC8551_CUSTOMER_SUPPORT)
-static int sc8551_check_reg_status(struct sc8551 *sc)
+/*static int sc8551_check_reg_status(struct sc8551 *sc)
 {
 	int ret;
 	u8 val;
@@ -1957,8 +2043,7 @@ static int sc8551_check_reg_status(struct sc8551 *sc)
 
 
 	return ret;
-}
-#endif
+}*/
 
 /*
  * interrupt does nothing, just info event chagne, other module could get info
@@ -1966,11 +2051,10 @@ static int sc8551_check_reg_status(struct sc8551 *sc)
  */
 static irqreturn_t sc8551_charger_interrupt(int irq, void *dev_id)
 {
-#if defined(SC8551_CUSTOMER_SUPPORT)
 	struct sc8551 *sc = dev_id;
 
-	pr_debug("INT OCCURRED\n");
-
+	sc_dbg("INT OCCURED\n");
+#if 0
 	mutex_lock(&sc->irq_complete);
 	sc->irq_waiting = true;
 	if (!sc->resume_completed) {
@@ -1983,19 +2067,18 @@ static irqreturn_t sc8551_charger_interrupt(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	}
 	sc->irq_waiting = false;
-#if defined(SC8551_CUSTOMER_SUPPORT)
+#if 0
 	/* TODO */
 	sc8551_check_alarm_status(sc);
 	sc8551_check_fault_status(sc);
 #endif
 
-#if defined(SC8551_CUSTOMER_SUPPORT)
+#if 0
 	sc8551_dump_reg(sc);
 #endif
 	mutex_unlock(&sc->irq_complete);
-
-	power_supply_changed(sc->fc2_psy);
 #endif
+	power_supply_changed(sc->fc2_psy);
 
 	return IRQ_HANDLED;
 }
@@ -2007,7 +2090,7 @@ static void determine_initial_status(struct sc8551 *sc)
 }
 
 
-static const struct of_device_id sc8551_charger_match_table[] = {
+static struct of_device_id sc8551_charger_match_table[] = {
 	{
 		.compatible = "sc,sc8551-standalone",
 		.data = &sc8551_mode_data[SC8551_STDALONE],
@@ -2035,8 +2118,11 @@ static int sc8551_charger_probe(struct i2c_client *client,
 	sc = devm_kzalloc(&client->dev, sizeof(struct sc8551), GFP_KERNEL);
 	if (!sc)
 		return -ENOMEM;
+
 	sc->dev = &client->dev;
+
 	sc->client = client;
+	
 
 	mutex_init(&sc->i2c_rw_lock);
 	mutex_init(&sc->data_lock);
@@ -2049,23 +2135,22 @@ static int sc8551_charger_probe(struct i2c_client *client,
 
 	ret = sc8551_detect_device(sc);
 	if (ret) {
-		pr_info("No sc8551 device found!\n");
+		sc_err("No sc8551 device found!\n");
 		return -ENODEV;
 	}
 	i2c_set_clientdata(client, sc);
-#if defined(SC8551_CUSTOMER_SUPPORT)
 	sc8551_create_device_node(&(client->dev));
-#endif
+
 	match = of_match_node(sc8551_charger_match_table, node);
 	if (match == NULL) {
-		pr_info("device tree match not found!\n");
+		sc_err("device tree match not found!\n");
 		return -ENODEV;
 	}
 
 	sc8551_get_work_mode(sc, &sc->mode);
 
 	if (sc->mode !=  *(int *)match->data) {
-		pr_info("device operation mode mismatch with dts configuration\n");
+		sc_err("device operation mode mismatch with dts configuration\n");
 		return -EINVAL;
 	}
 
@@ -2075,21 +2160,21 @@ static int sc8551_charger_probe(struct i2c_client *client,
 
 	ret = sc8551_init_device(sc);
 	if (ret) {
-		pr_info("Failed to init device\n");
+		sc_err("Failed to init device\n");
 		return ret;
 	}
-#if defined(SC8551_CUSTOMER_SUPPORT)
+
 	ret = sc8551_psy_register(sc);
 	if (ret)
-		goto err_1;
+		return ret;
 
 	ret = sc8551_init_irq(sc);
 	if (ret)
-		goto err_1;
+		return ret;
 
 	determine_initial_status(sc);
-#endif
-	pr_info("sc8551 probe successfully, Part Num:%d\n!",
+
+	sc_info("sc8551 probe successfully, Part Num:%d\n!",
 				sc->part_no);
 
 	return 0;
@@ -2112,7 +2197,7 @@ static int sc8551_suspend(struct device *dev)
 	mutex_lock(&sc->irq_complete);
 	sc->resume_completed = false;
 	mutex_unlock(&sc->irq_complete);
-	pr_info("Suspend successfully!");
+	sc_err("Suspend successfully!");
 
 	return 0;
 }
@@ -2123,7 +2208,7 @@ static int sc8551_suspend_noirq(struct device *dev)
 	struct sc8551 *sc = i2c_get_clientdata(client);
 
 	if (sc->irq_waiting) {
-		pr_info_ratelimited("Aborting suspend, an interrupt was detected while suspending\n");
+		pr_err_ratelimited("Aborting suspend, an interrupt was detected while suspending\n");
 		return -EBUSY;
 	}
 	return 0;
@@ -2146,8 +2231,8 @@ static int sc8551_resume(struct device *dev)
 		mutex_unlock(&sc->irq_complete);
 	}
 
-	//power_supply_changed(sc->fc2_psy);
-	pr_info("Resume successfully!");
+	power_supply_changed(sc->fc2_psy);
+	sc_err("Resume successfully!");
 
 	return 0;
 }
@@ -2155,7 +2240,7 @@ static int sc8551_charger_remove(struct i2c_client *client)
 {
 	struct sc8551 *sc = i2c_get_clientdata(client);
 
-	pr_debug("%s:enter!\n", __func__);
+	printk(KERN_DEBUG "%s:enter!\n",__func__);
 	sc8551_enable_adc(sc, false);
 
 	power_supply_unregister(sc->fc2_psy);
@@ -2173,8 +2258,7 @@ static void sc8551_charger_shutdown(struct i2c_client *client)
 {
 	struct sc8551 *sc = i2c_get_clientdata(client);
 
-	pr_debug("%s:enter!\n", __func__);
-
+	printk(KERN_DEBUG "%s:enter!\n",__func__);
 	sc8551_enable_adc(sc, false);
 }
 
@@ -2188,7 +2272,7 @@ static const struct i2c_device_id sc8551_charger_id[] = {
 	{"sc8551-standalone", SC8551_ROLE_STDALONE},
 	{},
 };
-
+	
 static struct i2c_driver sc8551_charger_driver = {
 	.driver		= {
 		.name	= "sc8551-charger",

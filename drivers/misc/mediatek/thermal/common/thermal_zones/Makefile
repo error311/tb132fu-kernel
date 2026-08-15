@@ -274,9 +274,16 @@ endif
 ifneq (,$(filter $(CONFIG_MTK_PLATFORM), "mt6885"))
 obj-$(CONFIG_THERMAL) += mtk_ts_battery.o
 
+# Lenovo's p11_pro_2gen kernel does not register the three generic MT6885
+# board-thermistor zones.  Its live thermal class instead uses battery/BQ,
+# CPU, PA, PMIC, WMT, charger and image-sensor zones.  Registering these
+# unused AUXADC-backed zones makes channel 2 read as 0, converts that to the
+# table maximum (125 C), and immediately trips mtk-cl-kshutdown01.
+ifeq (,$(findstring p11_pro_2gen,$(CONFIG_ARCH_MTK_PROJECT)))
 obj-$(CONFIG_THERMAL) += mtk_ts_bts.o
 obj-$(CONFIG_THERMAL) += mtk_ts_btsmdpa.o
 obj-$(CONFIG_THERMAL) += mtk_ts_btsnrpa.o
+endif
 
 obj-$(CONFIG_THERMAL) += mtk_ts_cpu_noBank.o
 obj-$(CONFIG_THERMAL) += mtk_ts_pa.o
@@ -285,10 +292,16 @@ obj-$(CONFIG_THERMAL) += mtk_ts_pmic.o
 obj-$(CONFIG_THERMAL) += mtk_ts_charger.o
 #obj-$(CONFIG_THERMAL) += mtk_ts_charger2.o
 
+# Lyriq's wireless-charging, Type-C and auxiliary battery thermistors use
+# IIO channels that do not exist in the TB132FU device tree.  The tablet's
+# battery and charger temperatures are provided by its BQ27541 and MediaTek
+# charger drivers instead.
+ifeq (,$(findstring p11_pro_2gen,$(CONFIG_ARCH_MTK_PROJECT)))
 obj-$(CONFIG_THERMAL) += mtk_ts_wtcharger.o
 obj-$(CONFIG_THERMAL) += mtk_ts_btstypc.o
 obj-$(CONFIG_THERMAL) += mtk_ts_bqtherm.o
 obj-$(CONFIG_THERMAL) += mtk_ts_wchgtherm.o
+endif
 
 ifneq ($(CONFIG_MTK_COMBO_WIFI),)
     obj-$(CONFIG_THERMAL) += mtk_ts_wmt.o

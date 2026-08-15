@@ -21,9 +21,14 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
+#include <linux/reboot.h>
 #include <linux/reset-controller.h>
 #include <linux/types.h>
 #include <linux/watchdog.h>
+
+#ifdef CONFIG_MTK_RTC
+#include <../misc/mediatek/include/mt-plat/mtk_rtc.h>
+#endif
 
 #define WDT_MAX_TIMEOUT		31
 #define WDT_MIN_TIMEOUT		1
@@ -45,6 +50,16 @@
 #define WDT_MODE_DUAL_EN	(1 << 6)
 #define WDT_MODE_KEY		0x22000000
 
+#define WDT_STATUS		0x0c
+#define WDT_NONRST_REG		0x20
+#define WDT_NONRST_REG2		0x24
+
+#define WDT_REQ_MODE		0x30
+#define WDT_REQ_MODE_KEY	0x33000000
+#define WDT_REQ_IRQ_EN		0x34
+#define WDT_REQ_IRQ_KEY		0x44000000
+#define WDT_REQ_MODE_DEBUG_EN	0x80000
+
 #define WDT_SWRST		0x14
 #define WDT_SWRST_KEY		0x1209
 
@@ -60,6 +75,15 @@
 #define DRV_NAME		"mtk-wdt"
 #define DRV_VERSION		"1.0"
 
+/*
+ * Diagnostic only: the TB132FU source-kernel port reaches Android userspace,
+ * but normal boot currently never starts the userspace watchdog feeder.  The
+ * bootloader leaves TOPRGU enabled, so that otherwise-live boot is reset after
+ * roughly 31 seconds.  Keep restart support intact while suppressing only the
+ * watchdog countdown, allowing ADB/live logging to expose the later failure.
+ */
+#define TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG 1
+
 static bool nowayout = WATCHDOG_NOWAYOUT;
 static unsigned int timeout;
 
@@ -73,6 +97,9 @@ struct mtk_wdt_dev {
 	void __iomem *wdt_base;
 	spinlock_t lock; /* protects WDT_SWSYSRST reg */
 	struct reset_controller_dev rcdev;
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	struct timer_list tb132fu_diagnostic_timer;
+#endif
 };
 
 struct mtk_wdt_data {
@@ -86,6 +113,22 @@ static const struct mtk_wdt_data mt2712_data = {
 static const struct mtk_wdt_data mt8183_data = {
 	.toprgu_sw_rst_num = MT8183_TOPRGU_SW_RST_NUM,
 };
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+static void tb132fu_diagnostic_disable_watchdog(struct timer_list *timer)
+{
+	struct mtk_wdt_dev *mtk_wdt = from_timer(mtk_wdt, timer,
+						 tb132fu_diagnostic_timer);
+	u32 reg;
+
+	/* Defeat direct TOPRGU rearming paths that bypass watchdog_ops. */
+	reg = readl(mtk_wdt->wdt_base + WDT_MODE);
+	reg &= ~WDT_MODE_EN;
+	reg |= WDT_MODE_KEY;
+	iowrite32(reg, mtk_wdt->wdt_base + WDT_MODE);
+	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
+}
+#endif
 
 static int toprgu_reset_update(struct reset_controller_dev *rcdev,
 			       unsigned long id, bool assert)
@@ -193,13 +236,24 @@ static void mtk_wdt_init(struct device_node *np,
 
 	wdt_base = mtk_wdt->wdt_base;
 
-	if (np)
-		mtk_wdt_parse_dt(np, wdt_dev);
+	/*
+	 * The TB132FU's Lenovo kernel does not apply the generic 4.19 DFD
+	 * programming during watchdog ownership handoff.  Keep LK's DFD setup
+	 * intact and follow Lenovo's TOPRGU sequence below instead.
+	 */
 
 	if (readl(wdt_base + WDT_MODE) & WDT_MODE_EN) {
 		set_bit(WDOG_HW_RUNNING, &wdt_dev->status);
 		mtk_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
 	}
+
+	/* Lenovo stops LK's inherited watchdog during kernel ownership handoff. */
+	mtk_wdt_stop(wdt_dev);
+
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	mtk_wdt_stop(wdt_dev);
+	pr_emerg("TB132FU: diagnostic build disabled the AP watchdog\n");
+#endif
 }
 
 static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
@@ -207,8 +261,43 @@ static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
 {
 	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
 	void __iomem *wdt_base;
+	const char *cmd = data;
+	u32 reg;
 
 	wdt_base = mtk_wdt->wdt_base;
+
+	/* Preserve Lenovo/MediaTek's reset-reason and bypass-power-key flow. */
+	writel(readl(wdt_base + WDT_STATUS), wdt_base + WDT_NONRST_REG);
+	reg = readl(wdt_base + WDT_MODE);
+	reg &= ~(WDT_MODE_DUAL_EN | WDT_MODE_IRQ_EN | WDT_MODE_EN |
+		 WDT_MODE_AUTO_START);
+	reg |= WDT_MODE_KEY;
+	writel(reg, wdt_base + WDT_MODE);
+
+	if (cmd && !strcmp(cmd, "recovery")) {
+		writel(readl(wdt_base + WDT_NONRST_REG2) | BIT(1),
+		       wdt_base + WDT_NONRST_REG2);
+#ifdef CONFIG_MTK_RTC
+		rtc_mark_recovery();
+#endif
+	} else if (cmd && !strcmp(cmd, "bootloader")) {
+		writel(readl(wdt_base + WDT_NONRST_REG2) | BIT(2),
+		       wdt_base + WDT_NONRST_REG2);
+#ifdef CONFIG_MTK_RTC
+		rtc_mark_fast();
+#endif
+	} else if (cmd && !strcmp(cmd, "kpoc")) {
+#if defined(CONFIG_MTK_RTC) && defined(CONFIG_MTK_KERNEL_POWER_OFF_CHARGING)
+		rtc_mark_kpoc();
+#endif
+	} else if (cmd && !strcmp(cmd, "enter_kpoc")) {
+#if defined(CONFIG_MTK_RTC) && defined(CONFIG_MTK_AUTO_POWER_ON_WITH_CHARGER)
+		rtc_mark_enter_kpoc();
+#endif
+	} else {
+		writel(readl(wdt_base + WDT_MODE) | WDT_MODE_AUTO_START |
+		       WDT_MODE_KEY, wdt_base + WDT_MODE);
+	}
 
 	while (1) {
 		writel(WDT_SWRST_KEY, wdt_base + WDT_SWRST);
@@ -273,6 +362,11 @@ static int mtk_wdt_start(struct watchdog_device *wdt_dev)
 	void __iomem *wdt_base = mtk_wdt->wdt_base;
 	int ret;
 
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	pr_emerg("TB132FU: diagnostic build suppressed AP watchdog start\n");
+	return 0;
+#endif
+
 	ret = mtk_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
 	if (ret < 0)
 		return ret;
@@ -309,6 +403,7 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 	struct resource *res;
 	const struct mtk_wdt_data *wdt_data;
 	int err;
+	u32 reg;
 
 	mtk_wdt = devm_kzalloc(dev, sizeof(*mtk_wdt), GFP_KERNEL);
 	if (!mtk_wdt)
@@ -336,6 +431,12 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 
 	mtk_wdt_init(pdev->dev.of_node, &mtk_wdt->wdt_dev);
 
+#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
+	timer_setup(&mtk_wdt->tb132fu_diagnostic_timer,
+		    tb132fu_diagnostic_disable_watchdog, 0);
+	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
+#endif
+
 	watchdog_stop_on_reboot(&mtk_wdt->wdt_dev);
 	err = devm_watchdog_register_device(dev, &mtk_wdt->wdt_dev);
 	if (unlikely(err))
@@ -343,6 +444,24 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 
 	dev_info(dev, "Watchdog enabled (timeout=%d sec, nowayout=%d)\n",
 		 mtk_wdt->wdt_dev.timeout, nowayout);
+
+	/* Exact Lenovo MT6893 TOPRGU request handoff. */
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_MODE);
+	reg &= ~WDT_REQ_MODE_DEBUG_EN;
+	reg |= WDT_REQ_MODE_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_MODE);
+
+	/* Enable direct reset requests for scpsys thermal and thermal control. */
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_MODE);
+	reg |= BIT(18) | BIT(0) | WDT_REQ_MODE_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_MODE);
+
+	reg = readl(mtk_wdt->wdt_base + WDT_REQ_IRQ_EN);
+	reg &= ~(BIT(18) | BIT(0));
+	reg |= WDT_REQ_IRQ_KEY;
+	writel(reg, mtk_wdt->wdt_base + WDT_REQ_IRQ_EN);
+
+	dev_info(dev, "TB132FU Lenovo TOPRGU handoff applied\n");
 
 	wdt_data = of_device_get_match_data(dev);
 	if (wdt_data) {

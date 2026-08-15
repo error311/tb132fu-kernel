@@ -957,7 +957,8 @@ static int brl_get_ic_info(struct goodix_ts_core *cd,
 	return 0;
 }
 
-#define GOODIX_ESD_TICK_WRITE_DATA	0xAA
+/* Lenovo's 2025 TB132FU kernel uses 0xFF for the Goodix watchdog tick. */
+#define GOODIX_ESD_TICK_WRITE_DATA	0xFF
 static int brl_esd_check(struct goodix_ts_core *cd)
 {
 	int ret;
