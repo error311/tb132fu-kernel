@@ -57,6 +57,7 @@ modules.builtin
 /vmlinuz
 /System.map
 /Module.markers
+/out-tb132fu-port/
 
 #
 # RPM spec file (make rpm-pkg)
