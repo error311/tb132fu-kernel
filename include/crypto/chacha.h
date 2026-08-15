@@ -24,6 +24,11 @@
 #define CHACHA_KEY_SIZE		32
 #define CHACHA_BLOCK_SIZE	64
 
+/* Compatibility names used by the newer random subsystem. */
+#define CHACHA20_IV_SIZE	CHACHA_IV_SIZE
+#define CHACHA20_KEY_SIZE	CHACHA_KEY_SIZE
+#define CHACHA20_BLOCK_SIZE	CHACHA_BLOCK_SIZE
+
 #define CHACHA_STATE_WORDS	(CHACHA_BLOCK_SIZE / sizeof(u32))
 
 /* 192-bit nonce, then 64-bit stream position */
@@ -33,6 +38,14 @@ void chacha_block_generic(u32 *state, u8 *stream, int nrounds);
 static inline void chacha20_block(u32 *state, u8 *stream)
 {
 	chacha_block_generic(state, stream, 20);
+}
+
+static inline void chacha_init_consts(u32 *state)
+{
+	state[0] = 0x61707865; /* "expa" */
+	state[1] = 0x3320646e; /* "nd 3" */
+	state[2] = 0x79622d32; /* "2-by" */
+	state[3] = 0x6b206574; /* "te k" */
 }
 
 void hchacha_block_arch(const u32 *state, u32 *out, int nrounds);
