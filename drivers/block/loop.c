@@ -1002,6 +1002,8 @@ loop_set_status_from_info(struct loop_device *lo,
 
 	if ((unsigned int) info->lo_encrypt_key_size > LO_KEY_SIZE)
 		return -EINVAL;
+	if (info->lo_offset > LLONG_MAX || info->lo_sizelimit > LLONG_MAX)
+		return -EOVERFLOW;
 
 	err = loop_release_xfer(lo);
 	if (err)
@@ -1083,7 +1085,12 @@ static int loop_configure(struct loop_device *lo, fmode_t mode,
 	mapping = file->f_mapping;
 	inode = mapping->host;
 
-	size = get_loop_size(lo, file);
+	size = get_size(config->info.lo_offset, config->info.lo_sizelimit,
+			file);
+	if (unlikely((loff_t)(sector_t)size != size)) {
+		error = -EFBIG;
+		goto out_unlock;
+	}
 
 	if ((config->info.lo_flags & ~LOOP_CONFIGURE_SETTABLE_FLAGS) != 0) {
 		error = -EINVAL;
@@ -1316,6 +1323,7 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 	int prev_lo_flags;
 	bool partscan = false;
 	bool size_changed = false;
+	loff_t new_size = 0;
 
 	err = mutex_lock_killable(&loop_ctl_mutex);
 	if (err)
@@ -1334,6 +1342,12 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 	if (lo->lo_offset != info->lo_offset ||
 	    lo->lo_sizelimit != info->lo_sizelimit) {
 		size_changed = true;
+		new_size = get_size(info->lo_offset, info->lo_sizelimit,
+				    lo->lo_backing_file);
+		if (unlikely((loff_t)(sector_t)new_size != new_size)) {
+			err = -EFBIG;
+			goto out_unlock;
+		}
 		sync_blockdev(lo->lo_device);
 		invalidate_bdev(lo->lo_device);
 	}
@@ -1364,8 +1378,6 @@ loop_set_status(struct loop_device *lo, const struct loop_info64 *info)
 	lo->lo_flags |= prev_lo_flags & ~LOOP_SET_STATUS_CLEARABLE_FLAGS;
 
 	if (size_changed) {
-		loff_t new_size = get_size(lo->lo_offset, lo->lo_sizelimit,
-					   lo->lo_backing_file);
 		loop_set_size(lo, new_size);
 	}
 
@@ -1553,6 +1565,8 @@ static int loop_set_capacity(struct loop_device *lo)
 		return -ENXIO;
 
 	size = get_loop_size(lo, lo->lo_backing_file);
+	if (unlikely((loff_t)(sector_t)size != size))
+		return -EFBIG;
 	loop_set_size(lo, size);
 
 	return 0;

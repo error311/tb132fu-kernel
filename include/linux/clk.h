@@ -387,6 +387,8 @@ int __must_check devm_clk_bulk_get(struct device *dev, int num_clks,
  * from the bus.
  */
 struct clk *devm_clk_get(struct device *dev, const char *id);
+struct clk *devm_clk_get_prepared(struct device *dev, const char *id);
+struct clk *devm_clk_get_enabled(struct device *dev, const char *id);
 
 /**
  * devm_clk_get_optional - lookup and obtain a managed reference to an optional
@@ -398,6 +400,8 @@ struct clk *devm_clk_get(struct device *dev, const char *id);
  * In this case, instead of returning -ENOENT, the function returns NULL.
  */
 struct clk *devm_clk_get_optional(struct device *dev, const char *id);
+struct clk *devm_clk_get_optional_prepared(struct device *dev, const char *id);
+struct clk *devm_clk_get_optional_enabled(struct device *dev, const char *id);
 
 /**
  * devm_get_clk_from_child - lookup and obtain a managed reference to a
@@ -666,8 +670,32 @@ static inline struct clk *devm_clk_get(struct device *dev, const char *id)
 	return NULL;
 }
 
+static inline struct clk *devm_clk_get_prepared(struct device *dev,
+						const char *id)
+{
+	return NULL;
+}
+
+static inline struct clk *devm_clk_get_enabled(struct device *dev,
+					       const char *id)
+{
+	return NULL;
+}
+
 static inline struct clk *devm_clk_get_optional(struct device *dev,
 						const char *id)
+{
+	return NULL;
+}
+
+static inline struct clk *devm_clk_get_optional_prepared(struct device *dev,
+							 const char *id)
+{
+	return NULL;
+}
+
+static inline struct clk *devm_clk_get_optional_enabled(struct device *dev,
+							const char *id)
 {
 	return NULL;
 }

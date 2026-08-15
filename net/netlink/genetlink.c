@@ -973,9 +973,17 @@ static int genl_bind(struct net *net, int group)
 		if (group >= f->mcgrp_offset &&
 		    group < f->mcgrp_offset + f->n_mcgrps) {
 			int fam_grp = group - f->mcgrp_offset;
+			const struct genl_multicast_group *grp =
+				&f->mcgrps[fam_grp];
 
 			if (!f->netnsok && net != &init_net)
 				err = -ENOENT;
+			else if ((grp->flags & GENL_UNS_ADMIN_PERM) &&
+				 !ns_capable(net->user_ns, CAP_NET_ADMIN))
+				err = -EPERM;
+			else if (grp->cap_sys_admin &&
+				 !ns_capable(net->user_ns, CAP_SYS_ADMIN))
+				err = -EPERM;
 			else if (f->mcast_bind)
 				err = f->mcast_bind(net, fam_grp);
 			else
