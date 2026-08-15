@@ -1,3 +1,17 @@
+Lenovo TB132FU kernel
+=====================
+
+This branch is the boot-validated Lenovo TB132FU downstream kernel. The current
+release is Linux 4.19.325-cip135-st19 with the tablet-specific display, touch,
+pen, camera, charging, connectivity, and accessory support retained. See
+``TB132FU.md`` for tested checkpoints, validation coverage, source composition,
+and flashing warnings.
+
+The immutable tested source tag is ``tb132fu-v84-4.19.325-cip135``. Building a
+flashable boot image also requires the matching device tree, ramdisk, external
+connectivity modules, and Android boot-image layout; this repository does not
+claim that a standalone ``Image`` is safely flashable.
+
 Linux kernel
 ============
 
