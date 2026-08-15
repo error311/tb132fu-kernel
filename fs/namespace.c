@@ -26,6 +26,7 @@
 #include <linux/bootmem.h>
 #include <linux/task_work.h>
 #include <linux/sched/task.h>
+#include <linux/types.h>
 
 #include "pnode.h"
 #include "internal.h"
@@ -200,6 +201,7 @@ static struct mount *alloc_vfsmnt(const char *name)
 		mnt->mnt_count = 1;
 		mnt->mnt_writers = 0;
 #endif
+		mnt->mnt.data = NULL;
 
 		INIT_HLIST_NODE(&mnt->mnt_hash);
 		INIT_LIST_HEAD(&mnt->mnt_child);
@@ -552,6 +554,7 @@ int sb_prepare_remount_readonly(struct super_block *sb)
 
 static void free_vfsmnt(struct mount *mnt)
 {
+	kfree(mnt->mnt.data);
 	kfree_const(mnt->mnt_devname);
 #ifdef CONFIG_SMP
 	free_percpu(mnt->mnt_pcp);
@@ -955,10 +958,18 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
 
+	if (type->alloc_mnt_data) {
+		mnt->mnt.data = type->alloc_mnt_data();
+		if (!mnt->mnt.data) {
+			mnt_free_id(mnt);
+			free_vfsmnt(mnt);
+			return ERR_PTR(-ENOMEM);
+		}
+	}
 	if (flags & SB_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
 
-	root = mount_fs(type, flags, name, data);
+	root = mount_fs(type, flags, name, &mnt->mnt, data);
 	if (IS_ERR(root)) {
 		mnt_free_id(mnt);
 		free_vfsmnt(mnt);
@@ -1001,6 +1012,14 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 	mnt = alloc_vfsmnt(old->mnt_devname);
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
+
+	if (sb->s_op->clone_mnt_data) {
+		mnt->mnt.data = sb->s_op->clone_mnt_data(old->mnt.data);
+		if (!mnt->mnt.data) {
+			err = -ENOMEM;
+			goto out_free;
+		}
+	}
 
 	if (flag & (CL_SLAVE | CL_PRIVATE | CL_SHARED_TO_SLAVE))
 		mnt->mnt_group_id = 0; /* not a peer of original */
@@ -2286,8 +2305,14 @@ static int do_remount(struct path *path, int ms_flags, int sb_flags,
 		err = change_mount_flags(path->mnt, ms_flags);
 	else if (!ns_capable(sb->s_user_ns, CAP_SYS_ADMIN))
 		err = -EPERM;
-	else
-		err = do_remount_sb(sb, sb_flags, data, 0);
+	else {
+		err = do_remount_sb2(path->mnt, sb, sb_flags, data, 0);
+		namespace_lock();
+		lock_mount_hash();
+		propagate_remount(mnt);
+		unlock_mount_hash();
+		namespace_unlock();
+	}
 	if (!err) {
 		lock_mount_hash();
 		mnt_flags |= mnt->mnt.mnt_flags & ~MNT_USER_SETTABLE_MASK;
@@ -2684,7 +2709,7 @@ void *copy_mount_options(const void __user * data)
 	 * the remainder of the page.
 	 */
 	/* copy_from_user cannot cross TASK_SIZE ! */
-	size = TASK_SIZE - (unsigned long)data;
+	size = TASK_SIZE - (unsigned long)untagged_addr(data);
 	if (size > PAGE_SIZE)
 		size = PAGE_SIZE;
 
@@ -2702,6 +2727,68 @@ char *copy_mount_string(const void __user *data)
 {
 	return data ? strndup_user(data, PAGE_SIZE) : NULL;
 }
+
+#ifdef CONFIG_FELICA_MOUNT_BLOCK
+/*
+ * Felica requirement:
+ * Mounts on "/system", "/system_ext", "/product", "/vendor" should be blocked
+ * e.g.
+ * adb root
+ * adb shell mount -r -w sdcard /system
+ * adb shell mount -r -w sdcard /system_ext
+ * adb shell mount -r -w sdcard /product
+ * adb shell mount -r -w sdcard /vendor
+ * adb shell mount -r -w /dev/block/vold/public:179,1 /system
+ * adb shell mount -r -w /dev/block/vold/public:179,1 /system_ext
+ * adb shell mount -r -w /dev/block/vold/public:179,1 /product
+ * adb shell mount -r -w /dev/block/vold/public:179,1 /vendor
+*/
+static bool mount_block_check(unsigned long flags, struct path *path)
+{
+	int i;
+	char *buf, *pathname;
+	u32 secid, su_secid, init_secid;
+	const char *su_secctx = "u:r:su:s0";
+	const char *init_secctx = "u:r:init:s0";
+	const char *blocklist[] = {"/system", "/system_ext", "/product", "/vendor", "/odm", "/oem"};
+	int len = ARRAY_SIZE(blocklist);
+	bool ret = false;
+
+	/* "adb remount" is allowed */
+	if (flags & MS_REMOUNT)
+		return ret;
+
+	buf = (char *)__get_free_page(GFP_KERNEL);
+	if (!buf)
+		return ret;
+
+	pathname = d_path(path, buf, PAGE_SIZE);
+	if (IS_ERR(pathname))
+		goto out_putname;
+
+	/* Check mount point */
+	for (i = 0; i < len; i++) {
+		if (!strncmp(pathname, blocklist[i], strlen(blocklist[i])))
+			break;
+	}
+	if (i == len)
+		goto out_putname;
+
+	security_secctx_to_secid(su_secctx, strlen(su_secctx), &su_secid);
+	security_secctx_to_secid(init_secctx, strlen(init_secctx), &init_secid);
+	security_task_getsecid(current, &secid);
+
+	/* "su" should be blocked, the secid of su equals init at init first stage*/
+	if ((secid != init_secid) && (secid == su_secid)) {
+		pr_warn("Mount on %s is not allowed with %d\n", pathname, secid);
+		ret = true;
+	}
+
+out_putname:
+	free_page((unsigned long)buf);
+	return ret;
+}
+#endif
 
 /*
  * Flags is a 32-bit value that allows up to 31 non-fs dependent flags to
@@ -2746,6 +2833,10 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 		retval = -EPERM;
 	if (!retval && (flags & SB_MANDLOCK) && !may_mandlock())
 		retval = -EPERM;
+#ifdef CONFIG_FELICA_MOUNT_BLOCK
+	if (mount_block_check(flags, &path))
+		retval = -EPERM;
+#endif
 	if (retval)
 		goto dput_out;
 

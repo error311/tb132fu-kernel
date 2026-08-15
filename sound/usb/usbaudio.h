@@ -66,6 +66,9 @@ struct snd_usb_audio {
 					 */
 
 	struct usb_host_interface *ctrl_intf;	/* the audio control interface */
+	struct mutex dev_lock;  /* to protect any race with disconnect */
+	int card_num;	/* cache pcm card number to use upon disconnect */
+	void (*disconnect_cb)(struct snd_usb_audio *chip); /* callback to cleanup on disconnect */
 };
 
 #define USB_AUDIO_IFACE_UNUSED	((void *)-1L)
@@ -79,6 +82,12 @@ struct snd_usb_audio {
 #define usb_audio_dbg(chip, fmt, args...) \
 	dev_dbg(&(chip)->dev->dev, fmt, ##args)
 
+#define usb_audio_err_ratelimited(chip, fmt, args...) \
+	dev_info_ratelimited(&(chip)->dev->dev, fmt, ##args)
+#define usb_audio_info_ratelimited(chip, fmt, args...) \
+	dev_info_ratelimited(&(chip)->dev->dev, fmt, ##args)
+#define usb_audio_dbg_ratelimited(chip, fmt, args...) \
+	dev_dbg_ratelimited(&(chip)->dev->dev, fmt, ##args)
 /*
  * Information about devices with broken descriptors
  */

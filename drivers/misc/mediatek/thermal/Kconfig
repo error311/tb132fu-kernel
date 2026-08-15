@@ -1,0 +1,56 @@
+config MTK_LEGACY_THERMAL
+	bool "Use MTK legacy thermal code"
+	help
+	  Upstream thermal code and legacy thermal
+	  code are not compatiable. As a result,
+	  add a new switch MTK_LEGACY_THERMAL to replace
+	  CONFIG_THERMAL for MTK legacy thermal code.
+
+config MTK_THERMAL_PA_VIA_ATCMD
+	bool "Thermal switch for query modem RF temp"
+	depends on MTK_LEGACY_THERMAL
+	help
+	  Internal switch for thermal management
+	  to query modem RF temperature
+	  via AT command.
+	  (RIL sockets)
+
+config MTK_LEGACY_THERMAL_PLATFORM
+	string "MTK legacy thermal platform name"
+	depends on MTK_LEGACY_THERMAL
+	help
+	  To separate platform codes for legacy thermal
+	  drivers. Config platform name for your
+	  selection. It's used for legacy thermal
+	  drivers only.
+
+config USE_MT6360_TS_PIN
+	bool "USE MT6360 TS PIN"
+	default n
+	help
+	  This feature option is used to enable/disable
+          the MT6360 TS detection temperature.
+
+config POWEROFF_CHG_THERM_LYRIQ
+	bool "Support thermal control in power off charging"
+	default n
+	help
+	  This feature option is used to support thermal
+          control in poweroff charging for project lyriq.
+
+config TYPEC_GPIO_OUT_TOGGLE
+	bool "Enable usb therm gpio toggle"
+	default n
+	help
+	  This feature option is used to enable/disable
+          mosfet control in usb therm gpio.
+
+config GENEVA_THERMAL_NTC
+	bool "Genva thermal ntc"
+	help
+	  Enable the geneva thermal ntc
+
+config THERMAL_CP_SUPPORT
+      bool "Thermal charge pump support"
+      help
+         3rd charge pump thermal limit charge current

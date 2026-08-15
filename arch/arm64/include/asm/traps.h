@@ -46,6 +46,12 @@ void arm64_force_sig_info(struct siginfo *info, const char *str,
  */
 void arm64_skip_faulting_instruction(struct pt_regs *regs, unsigned long size);
 
+/*
+ * Move regs->pc to next instruction and do necessary setup before it
+ * is executed.
+ */
+void arm64_skip_faulting_instruction(struct pt_regs *regs, unsigned long size);
+
 static inline int __in_irqentry_text(unsigned long ptr)
 {
 	return ptr >= (unsigned long)&__irqentry_text_start &&
@@ -120,4 +126,12 @@ static inline u32 arm64_ras_serror_get_severity(u32 esr)
 
 bool arm64_is_fatal_ras_serror(struct pt_regs *regs, unsigned int esr);
 void __noreturn arm64_serror_panic(struct pt_regs *regs, u32 esr);
+
+extern int (*do_tlb_conf_fault_cb)(unsigned long addr,
+				   unsigned int esr,
+				   struct pt_regs *regs);
+extern int do_tlb_conf_fault(unsigned long addr,
+			     unsigned int esr,
+			     struct pt_regs *regs);
+
 #endif

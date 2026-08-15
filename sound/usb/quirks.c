@@ -1174,9 +1174,6 @@ void snd_usb_set_format_quirk(struct snd_usb_substream *subs,
 	case USB_ID(0x041e, 0x3f19): /* E-Mu 0204 USB */
 		set_format_emu_quirk(subs, fmt);
 		break;
-	case USB_ID(0x534d, 0x2109): /* MacroSilicon MS2109 */
-		subs->stream_offset_adj = 2;
-		break;
 	}
 }
 
@@ -1531,6 +1528,21 @@ void snd_usb_audioformat_attributes_quirk(struct snd_usb_audio *chip,
 			fp->ep_attr |= USB_ENDPOINT_SYNC_SYNC;
 		break;
 	}
+}
+
+bool snd_usb_support_autosuspend_quirk(struct usb_device *dev)
+{
+	struct snd_usb_audio *chip = dev_get_drvdata(&dev->dev);
+
+	if (!chip)
+		return false;
+
+	switch (chip->usb_id) {
+	case USB_ID(0x1963, 0x0020):
+		dev_info(&dev->dev, "snd device not support autosuspend");
+		return false;
+	}
+	return true;
 }
 
 /*

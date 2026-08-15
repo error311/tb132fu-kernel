@@ -1,0 +1,29 @@
+/*
+ * Things can done here:
+ * 	Add nodes or properties to root node
+ * 	Delete nodes or properties
+*/
+
+/ {
+	moto_chg_tcmd: moto_chg_tcmd {
+	};
+        tboard_thermistor4: thermal-sensor4 {
+        };
+
+        tboard_thermistor5: thermal-sensor5 {
+        };
+
+        tboard_thermistor6: thermal-sensor6 {
+        };
+
+        tboard_thermistor7: thermal-sensor7 {
+        };
+
+        tboard_thermistor8: thermal-sensor8 {
+        };
+
+        tboard_thermistor9: thermal-sensor9 {
+        };
+	moto_wlc: moto_wlc {
+        };
+};
