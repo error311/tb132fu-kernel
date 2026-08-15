@@ -22,6 +22,7 @@
 #include <linux/string.h>
 #include <linux/input.h>
 #include <linux/platform_device.h>
+#include <linux/proc_fs.h>
 #include <linux/version.h>
 #include <linux/delay.h>
 #include <linux/atomic.h>
@@ -50,6 +51,58 @@ struct gesture_module {
 
 static struct gesture_module *gsx_gesture; /*allocated in gesture init module*/
 static bool module_initialized;
+static struct proc_dir_entry *gesture_control_entry;
+
+/*
+ * Lenovo's userspace DT2W control expects /proc/gesture_control.  Keep that
+ * ABI as a narrow compatibility wrapper around the Goodix double-tap flag so
+ * both the stock vendor service and TrebleDroid can use the native driver.
+ */
+static ssize_t gesture_control_read(struct file *file, char __user *buf,
+		size_t count, loff_t *ppos)
+{
+	const char *state;
+	struct gesture_module *gsx = gsx_gesture;
+
+	if (!gsx || !gsx->ts_core || !atomic_read(&gsx->registered))
+		return -EAGAIN;
+
+	state = (gsx->ts_core->gesture_type & GESTURE_DOUBLE_TAP) ?
+		"enable\n" : "disable\n";
+	return simple_read_from_buffer(buf, count, ppos, state, strlen(state));
+}
+
+static ssize_t gesture_control_write(struct file *file,
+		const char __user *buf, size_t count, loff_t *ppos)
+{
+	char value;
+	struct gesture_module *gsx = gsx_gesture;
+
+	if (!count)
+		return -EINVAL;
+	if (!gsx || !gsx->ts_core || !atomic_read(&gsx->registered))
+		return -EAGAIN;
+	if (copy_from_user(&value, buf, sizeof(value)))
+		return -EFAULT;
+
+	if (value == '1') {
+		gsx->ts_core->gesture_type |= GESTURE_DOUBLE_TAP;
+		ts_info("enable double tap through Lenovo compatibility node");
+	} else if (value == '0') {
+		gsx->ts_core->gesture_type &= ~GESTURE_DOUBLE_TAP;
+		ts_info("disable double tap through Lenovo compatibility node");
+	} else {
+		return -EINVAL;
+	}
+
+	return count;
+}
+
+static const struct file_operations gesture_control_fops = {
+	.owner = THIS_MODULE,
+	.read = gesture_control_read,
+	.write = gesture_control_write,
+};
 
 static ssize_t gsx_double_type_show(struct goodix_ext_module *module,
 		char *buf)
@@ -415,6 +468,10 @@ int gesture_module_init(void)
 
 	module_initialized = true;
 	goodix_register_ext_module_no_wait(&gsx_gesture->module);
+	gesture_control_entry = proc_create("gesture_control", 0664, NULL,
+			&gesture_control_fops);
+	if (!gesture_control_entry)
+		ts_err("failed create Lenovo gesture compatibility node");
 	ts_info("gesture module init success");
 
 	return 0;
@@ -428,6 +485,11 @@ err_out:
 void gesture_module_exit(void)
 {
 	int i;
+
+	if (gesture_control_entry) {
+		remove_proc_entry("gesture_control", NULL);
+		gesture_control_entry = NULL;
+	}
 
 	ts_info("gesture module exit");
 	if (!module_initialized)
