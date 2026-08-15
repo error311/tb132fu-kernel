@@ -1221,8 +1221,8 @@ parse_ntb:
 
 	block_len = get_ncm(&tmp, opts->block_length);
 	/* (d)wBlockLength */
-	if (block_len > ntb_max) {
-		INFO(port->func.config->cdev, "OUT size exceeded\n");
+	if ((block_len < opts->nth_size + opts->ndp_size) || (block_len > ntb_max)) {
+		INFO(port->func.config->cdev, "Bad block length: %#X\n", block_len);
 		goto err;
 	}
 
@@ -1499,6 +1499,8 @@ static int ncm_bind(struct usb_configuration *c, struct usb_function *f)
 		goto netdev_cleanup;
 	}
 	ncm->port.ioport = netdev_priv(ncm_opts->net);
+
+	ncm_string_defs[1].s = ncm->ethaddr;
 
 	us = usb_gstrings_attach(cdev, ncm_strings,
 				 ARRAY_SIZE(ncm_string_defs));
