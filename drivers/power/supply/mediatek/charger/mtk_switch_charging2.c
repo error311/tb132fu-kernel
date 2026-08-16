@@ -473,7 +473,9 @@ static void swchg_select_cv(struct charger_manager *info)
 	constant_voltage = info->data.battery_cv;
 	mtk_get_dynamic_cv(info, &constant_voltage);
 
-	constant_voltage = info->mmi.target_fv;
+	/* The TB132FU has no Motorola MMI charge policy in its device tree. */
+	if (info->mmi.temp_zones && info->mmi.target_fv > 0)
+		constant_voltage = info->mmi.target_fv;
 	charger_dev_set_constant_voltage(info->chg1_dev, constant_voltage);
 }
 
@@ -904,15 +906,13 @@ static int mtk_switch_chr_pdc_run(struct charger_manager *info)
 	data->pd_vbus_low_bound = pdata->pd_vbus_low_bound;
 	data->pd_vbus_upper_bound = pdata->pd_vbus_upper_bound;
 
-#ifdef MTK_BASE
 	data->battery_cv = pdata->battery_cv;
 	if (info->enable_sw_jeita) {
 		if (info->sw_jeita.cv != 0)
 			data->battery_cv = info->sw_jeita.cv;
 	}
-#else
-	data->battery_cv = info->mmi.target_fv;
-#endif
+	if (info->mmi.temp_zones && info->mmi.target_fv > 0)
+		data->battery_cv = info->mmi.target_fv;
 
 	if (info->enable_hv_charging == false)
 		goto stop;

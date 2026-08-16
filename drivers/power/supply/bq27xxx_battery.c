@@ -620,7 +620,6 @@ static enum power_supply_property bq27541_props[] = {
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
 	POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
-	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_NOW,
@@ -1851,6 +1850,8 @@ static int bq27xxx_battery_get_property(struct power_supply *psy,
 		ret = bq27xxx_simple_value(di->cache.time_to_empty_avg, val);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
+		if (di->regs[BQ27XXX_REG_TTF] == INVALID_REG_ADDR)
+			return -ENODATA;
 		ret = bq27xxx_simple_value(di->cache.time_to_full, val);
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:

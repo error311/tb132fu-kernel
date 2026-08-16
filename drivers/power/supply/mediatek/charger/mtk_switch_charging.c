@@ -514,7 +514,15 @@ static void swchg_select_cv(struct charger_manager *info)
 	constant_voltage = info->data.battery_cv;
 	mtk_get_dynamic_cv(info, &constant_voltage);
 
-	constant_voltage = info->mmi.target_fv;
+	/*
+	 * Motorola's MMI policy is optional.  The TB132FU device tree has no
+	 * MMI temperature zones, so target_fv remains zero.  Passing that zero
+	 * to MT6360 clamps the charger to its 3.9 V minimum and immediately
+	 * generates a false end-of-charge event.  Keep the MTK/Lenovo CV unless
+	 * a configured MMI policy has produced a valid target.
+	 */
+	if (info->mmi.temp_zones && info->mmi.target_fv > 0)
+		constant_voltage = info->mmi.target_fv;
 	charger_dev_set_constant_voltage(info->chg1_dev, constant_voltage);
 }
 

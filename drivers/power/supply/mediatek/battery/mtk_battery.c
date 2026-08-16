@@ -700,9 +700,13 @@ static int battery_get_property(struct power_supply *psy,
 		if (ret == 0)
 			break;
 		if (ret != -ENODEV) {
-			/* The BQ27541 uses -ENODATA when it cannot form an estimate. */
-			val->intval = 0;
-			ret = 0;
+			/*
+			 * The TB132FU's BQ27541-compatible gauge does not expose a
+			 * trustworthy time-to-full register.  Preserve that as
+			 * unsupported so Android can use its charge-step estimator.
+			 * Returning zero here incorrectly means "already full".
+			 */
+			ret = -ENODATA;
 			break;
 		}
 
