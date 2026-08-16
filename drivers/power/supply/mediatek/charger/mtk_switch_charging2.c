@@ -801,40 +801,41 @@ static int select_pdc_charging_current_limit(struct charger_manager *info)
 
 	pdata->input_current_limit =
 		info->data.pd_charger_current;
-
-#ifdef MTK_BASE
 	pdata->charging_current_limit =
 		info->data.pd_charger_current;
-#else
-	pdata->charging_current_limit = ((info->mmi.target_fcc < 0) ? 0 : info->mmi.target_fcc);
 
-	ret = mmi_get_prop_from_charger(info,
-				POWER_SUPPLY_PROP_ONLINE, &val);
-	if (ret < 0) {
-		pr_err("[%s]Error getting charger online ret = %d\n", __func__, ret);
-		val.intval = 0;
+	/* Keep the Motorola MMI ownership confined to Motorola products. */
+	if (IS_ENABLED(CONFIG_MOT_LYRIQ)) {
+		pdata->charging_current_limit =
+			(info->mmi.target_fcc < 0) ? 0 : info->mmi.target_fcc;
+
+		ret = mmi_get_prop_from_charger(info,
+					POWER_SUPPLY_PROP_ONLINE, &val);
+		if (ret < 0) {
+			pr_err("[%s]Error getting charger online ret = %d\n",
+				__func__, ret);
+			val.intval = 0;
+		}
+
+		if (info->mmi.target_usb == 0 && val.intval)
+			charger_manager_notifier(info, CHARGER_NOTIFY_NORMAL);
+
+		info->mmi.target_usb = pdata->input_current_limit;
+
+		if (info->mmi.adaptive_charging_disable_ibat &&
+		    !info->mmi.battery_charging_disable) {
+			pdata->charging_current_limit = 0;
+			info->mmi.battery_charging_disable = true;
+			charger_manager_notifier(info, CHARGER_NOTIFY_ERROR);
+		} else if (!info->mmi.adaptive_charging_disable_ibat &&
+			   info->mmi.battery_charging_disable) {
+			info->mmi.battery_charging_disable = false;
+			charger_manager_notifier(info, CHARGER_NOTIFY_NORMAL);
+		} else if (info->mmi.adaptive_charging_disable_ibat &&
+			   info->mmi.battery_charging_disable) {
+			pdata->charging_current_limit = 0;
+		}
 	}
-
-	if ((info->mmi.target_usb == 0) && (val.intval)) {
-		charger_manager_notifier(info, CHARGER_NOTIFY_NORMAL);
-	}
-
-	info->mmi.target_usb = pdata->input_current_limit;
-
-	if (info->mmi.adaptive_charging_disable_ibat
-		&& !info->mmi.battery_charging_disable) {
-		pdata->charging_current_limit = 0;
-		info->mmi.battery_charging_disable = true;
-		charger_manager_notifier(info, CHARGER_NOTIFY_ERROR);
-	} else if (!info->mmi.adaptive_charging_disable_ibat
-			&& info->mmi.battery_charging_disable) {
-		info->mmi.battery_charging_disable = false;
-		charger_manager_notifier(info, CHARGER_NOTIFY_NORMAL);
-	} else if (info->mmi.adaptive_charging_disable_ibat
-			&& info->mmi.battery_charging_disable) {
-		pdata->charging_current_limit = 0;
-	}
-#endif
 
 	sc_select_charging_current(info, pdata);
 
