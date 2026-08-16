@@ -346,7 +346,10 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 		}
 	}
 
-	pdata->charging_current_limit = ((info->mmi.target_fcc < 0) ? 0 : info->mmi.target_fcc);
+	/* Motorola's MMI policy owns FCC only on Motorola products. */
+	if (IS_ENABLED(CONFIG_MOT_LYRIQ))
+		pdata->charging_current_limit =
+			(info->mmi.target_fcc < 0) ? 0 : info->mmi.target_fcc;
 
 	ret = mmi_get_prop_from_charger(info,
 				POWER_SUPPLY_PROP_ONLINE, &val);
