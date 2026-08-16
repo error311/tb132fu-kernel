@@ -1594,7 +1594,14 @@ static void bq27xxx_battery_update_unlocked(struct bq27xxx_device_info *di)
 			di->charge_design_full = bq27xxx_battery_read_dcap(di);
 	}
 
-	if (di->cache.capacity != cache.capacity)
+	/*
+	 * power_supply_register_no_ws() can publish the power-supply device and
+	 * invoke get_property() before it returns the new object to di->bat.  The
+	 * TB132FU battery bridge makes that registration window easy to hit during
+	 * the initial power-supply uevent.  Do not notify through the not-yet-set
+	 * pointer; the explicit update after registration will publish the state.
+	 */
+	if (di->bat && di->cache.capacity != cache.capacity)
 		power_supply_changed(di->bat);
 
 	if (memcmp(&di->cache, &cache, sizeof(cache)) != 0)
