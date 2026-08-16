@@ -75,15 +75,6 @@
 #define DRV_NAME		"mtk-wdt"
 #define DRV_VERSION		"1.0"
 
-/*
- * Diagnostic only: the TB132FU source-kernel port reaches Android userspace,
- * but normal boot currently never starts the userspace watchdog feeder.  The
- * bootloader leaves TOPRGU enabled, so that otherwise-live boot is reset after
- * roughly 31 seconds.  Keep restart support intact while suppressing only the
- * watchdog countdown, allowing ADB/live logging to expose the later failure.
- */
-#define TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG 1
-
 static bool nowayout = WATCHDOG_NOWAYOUT;
 static unsigned int timeout;
 
@@ -97,9 +88,6 @@ struct mtk_wdt_dev {
 	void __iomem *wdt_base;
 	spinlock_t lock; /* protects WDT_SWSYSRST reg */
 	struct reset_controller_dev rcdev;
-#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
-	struct timer_list tb132fu_diagnostic_timer;
-#endif
 };
 
 struct mtk_wdt_data {
@@ -113,22 +101,6 @@ static const struct mtk_wdt_data mt2712_data = {
 static const struct mtk_wdt_data mt8183_data = {
 	.toprgu_sw_rst_num = MT8183_TOPRGU_SW_RST_NUM,
 };
-
-#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
-static void tb132fu_diagnostic_disable_watchdog(struct timer_list *timer)
-{
-	struct mtk_wdt_dev *mtk_wdt = from_timer(mtk_wdt, timer,
-						 tb132fu_diagnostic_timer);
-	u32 reg;
-
-	/* Defeat direct TOPRGU rearming paths that bypass watchdog_ops. */
-	reg = readl(mtk_wdt->wdt_base + WDT_MODE);
-	reg &= ~WDT_MODE_EN;
-	reg |= WDT_MODE_KEY;
-	iowrite32(reg, mtk_wdt->wdt_base + WDT_MODE);
-	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
-}
-#endif
 
 static int toprgu_reset_update(struct reset_controller_dev *rcdev,
 			       unsigned long id, bool assert)
@@ -249,11 +221,6 @@ static void mtk_wdt_init(struct device_node *np,
 
 	/* Lenovo stops LK's inherited watchdog during kernel ownership handoff. */
 	mtk_wdt_stop(wdt_dev);
-
-#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
-	mtk_wdt_stop(wdt_dev);
-	pr_emerg("TB132FU: diagnostic build disabled the AP watchdog\n");
-#endif
 }
 
 static int mtk_wdt_restart(struct watchdog_device *wdt_dev,
@@ -361,12 +328,6 @@ static int mtk_wdt_start(struct watchdog_device *wdt_dev)
 	struct mtk_wdt_dev *mtk_wdt = watchdog_get_drvdata(wdt_dev);
 	void __iomem *wdt_base = mtk_wdt->wdt_base;
 	int ret;
-
-#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
-	pr_emerg("TB132FU: diagnostic build suppressed AP watchdog start\n");
-	return 0;
-#endif
-
 	ret = mtk_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
 	if (ret < 0)
 		return ret;
@@ -430,13 +391,6 @@ static int mtk_wdt_probe(struct platform_device *pdev)
 	watchdog_set_drvdata(&mtk_wdt->wdt_dev, mtk_wdt);
 
 	mtk_wdt_init(pdev->dev.of_node, &mtk_wdt->wdt_dev);
-
-#if TB132FU_DIAGNOSTIC_DISABLE_WATCHDOG
-	timer_setup(&mtk_wdt->tb132fu_diagnostic_timer,
-		    tb132fu_diagnostic_disable_watchdog, 0);
-	mod_timer(&mtk_wdt->tb132fu_diagnostic_timer, jiffies + HZ);
-#endif
-
 	watchdog_stop_on_reboot(&mtk_wdt->wdt_dev);
 	err = devm_watchdog_register_device(dev, &mtk_wdt->wdt_dev);
 	if (unlikely(err))
