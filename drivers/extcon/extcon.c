@@ -1310,8 +1310,14 @@ int extcon_dev_register(struct extcon_dev *edev)
 		}
 	}
 
-	edev->bnh = devm_kzalloc(&edev->dev,
-			sizeof(*edev->bnh) * edev->max_supported, GFP_KERNEL);
+	/*
+	 * device_register() intentionally happens below, after drvdata is set.
+	 * The embedded device's devres list therefore is not initialized yet and
+	 * must not be used here. This is the Android common-kernel follow-up to
+	 * cb81ea998c461 (ANDROID commit 926e3eb3d5dd0).
+	 */
+	edev->bnh = kzalloc(sizeof(*edev->bnh) * edev->max_supported,
+			    GFP_KERNEL);
 	if (!edev->bnh) {
 		ret = -ENOMEM;
 		goto err_dev;
@@ -1328,7 +1334,7 @@ int extcon_dev_register(struct extcon_dev *edev)
 	ret = device_register(&edev->dev);
 	if (ret) {
 		put_device(&edev->dev);
-		goto err_dev;
+		goto err_reg;
 	}
 
 	mutex_lock(&extcon_dev_list_lock);
@@ -1337,6 +1343,8 @@ int extcon_dev_register(struct extcon_dev *edev)
 
 	return 0;
 
+err_reg:
+	kfree(edev->bnh);
 err_dev:
 	if (edev->max_supported)
 		kfree(edev->nh);
@@ -1403,6 +1411,7 @@ void extcon_dev_unregister(struct extcon_dev *edev)
 		kfree(edev->cables);
 		kfree(edev->nh);
 	}
+	kfree(edev->bnh);
 
 	put_device(&edev->dev);
 }

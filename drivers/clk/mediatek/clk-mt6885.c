@@ -2145,6 +2145,16 @@ static const struct mtk_gate_regs ifrao4_cg_regs = {
 		.ops = &mtk_clk_gate_ops_setclr,	\
 	}
 
+#define GATE_IFRAO0_IGN(_id, _name, _parent, _shift) {	\
+		.id = _id,				\
+		.name = _name,				\
+		.parent_name = _parent,			\
+		.regs = &ifrao0_cg_regs,			\
+		.shift = _shift,			\
+		.ops = &mtk_clk_gate_ops_setclr,	\
+		.flags = CLK_IGNORE_UNUSED,		\
+	}
+
 #define GATE_IFRAO1(_id, _name, _parent, _shift) {	\
 		.id = _id,				\
 		.name = _name,				\
@@ -2280,7 +2290,13 @@ static const struct mtk_gate ifrao_clks[] = {
 			"axi_ck"/* parent */, 27),
 	GATE_IFRAO0(CLK_IFRAO_CQ_DMA_FPC, "ifrao_dma",
 			"axi_ck"/* parent */, 28),
-	GATE_IFRAO0(CLK_IFRAO_BTIF, "ifrao_btif",
+	/*
+	 * LK or a previous Android session can leave conninfra/BT owning this
+	 * interface. Auto-gating it during late init can wedge the MMIO write and
+	 * leave the kernel to be reset by TOPRGU. Consumers may still gate it
+	 * explicitly; only the unsafe unused-clock sweep is suppressed.
+	 */
+	GATE_IFRAO0_IGN(CLK_IFRAO_BTIF, "ifrao_btif",
 			"axi_ck"/* parent */, 31),
 	/* IFRAO1 */
 	GATE_IFRAO1(CLK_IFRAO_SPI0, "ifrao_spi0",
@@ -2775,4 +2791,3 @@ static void __exit clk_mt6893_exit(void)
 postcore_initcall_sync(clk_mt6893_init);
 module_exit(clk_mt6893_exit);
 MODULE_LICENSE("GPL");
-
