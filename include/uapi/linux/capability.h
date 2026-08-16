@@ -366,8 +366,23 @@ struct vfs_ns_cap_data {
 
 #define CAP_AUDIT_READ		37
 
+/*
+ * Allow system performance and observability privileged operations.
+ *
+ * Android 17's zygote capability-bounding code uses the modern capability
+ * namespace even when running on a legacy kernel.  Keep these numeric UAPI
+ * definitions aligned with current userspace; existing 4.19 subsystems retain
+ * their CAP_SYS_ADMIN compatibility checks unless separately backported.
+ */
+#define CAP_PERFMON		38
 
-#define CAP_LAST_CAP         CAP_AUDIT_READ
+/* Allow privileged BPF operations. */
+#define CAP_BPF			39
+
+/* Allow checkpoint/restore operations. */
+#define CAP_CHECKPOINT_RESTORE	40
+
+#define CAP_LAST_CAP         CAP_CHECKPOINT_RESTORE
 
 #define cap_valid(x) ((x) >= 0 && (x) <= CAP_LAST_CAP)
 
