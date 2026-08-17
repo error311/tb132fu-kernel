@@ -143,16 +143,19 @@ static void swchg_select_charging_current_limit(struct charger_manager *info)
 	if (dev != NULL){
 		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node){
-			chr_err("%s: failed to get boot mode phandle\n", __func__);
+			pr_notice_once("%s: boot mode node unavailable; using UNKNOWN_BOOT\n",
+				       __func__);
 		}
 		else {
 			tag = (struct tag_bootmode *)of_get_property(boot_node,
 								"atag,boot", NULL);
 			if (!tag){
-				chr_err("%s: failed to get atag,boot\n", __func__);
+				pr_notice_once("%s: atag,boot unavailable; using UNKNOWN_BOOT\n",
+					       __func__);
 			}
 			else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 
@@ -540,16 +543,19 @@ static void swchg_turn_on_charging(struct charger_manager *info)
 	if (dev != NULL){
 		boot_node = tb132fu_find_boot_node(dev);
 		if (!boot_node){
-			chr_err("%s: failed to get boot mode phandle\n", __func__);
+			pr_notice_once("%s: boot mode node unavailable; using UNKNOWN_BOOT\n",
+				       __func__);
 		}
 		else {
 			tag = (struct tag_bootmode *)of_get_property(boot_node,
 								"atag,boot", NULL);
 			if (!tag){
-				chr_err("%s: failed to get atag,boot\n", __func__);
+				pr_notice_once("%s: atag,boot unavailable; using UNKNOWN_BOOT\n",
+					       __func__);
 			}
 			else
 				boot_mode = tag->bootmode;
+			of_node_put(boot_node);
 		}
 	}
 

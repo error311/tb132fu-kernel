@@ -417,8 +417,6 @@ static int kbase_api_handshake(struct kbase_file *kfile,
 			       struct kbase_ioctl_version_check *version)
 {
 	int err = 0;
-	u16 requested_major = version->major;
-	u16 requested_minor = version->minor;
 
 	switch (version->major) {
 	case BASE_UK_VERSION_MAJOR:
@@ -439,10 +437,6 @@ static int kbase_api_handshake(struct kbase_file *kfile,
 
 	/* save the proposed version number for later use */
 	err = kbase_file_set_api_version(kfile, version->major, version->minor);
-	dev_notice(kfile->kbdev->dev,
-		"TB132FU GPU handshake userspace %u.%u, kernel %u.%u, ret=%d\n",
-		requested_major, requested_minor, version->major, version->minor,
-		err);
 	if (unlikely(err))
 		return err;
 
@@ -763,9 +757,6 @@ static int kbase_open(struct inode *inode, struct file *filp)
 
 	filp->private_data = kfile;
 	filp->f_mode |= FMODE_UNSIGNED_OFFSET;
-	dev_notice(kbdev->dev,
-		"TB132FU GPU open success: minor=%u pid=%d comm=%s\n",
-		iminor(inode), current->pid, current->comm);
 
 	return 0;
 
@@ -1699,11 +1690,6 @@ static long kbase_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct kbase_context *kctx = NULL;
 	struct kbase_device *kbdev = kfile->kbdev;
 	void __user *uarg = (void __user *)arg;
-
-	dev_notice_ratelimited(kbdev->dev,
-		"TB132FU GPU ioctl: cmd=0x%x nr=%u size=%u dir=%u setup=%d pid=%d comm=%s\n",
-		cmd, _IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd),
-		atomic_read(&kfile->setup_state), current->pid, current->comm);
 
 	/* Only these ioctls are available until setup is complete */
 	switch (cmd) {
