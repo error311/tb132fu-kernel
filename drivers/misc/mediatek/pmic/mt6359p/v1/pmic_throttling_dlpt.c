@@ -1079,7 +1079,8 @@ int get_dlpt_imix_spm(void)
 	static unsigned int pre_ui_soc = 101;
 	unsigned int ui_soc;
 
-	ui_soc = battery_get_uisoc();
+	/* syscore suspend cannot perform the BQ27541's sleeping I2C transfer. */
+	ui_soc = battery_get_uisoc_cached();
 
 	if (ui_soc != pre_ui_soc)
 		pre_ui_soc = ui_soc;

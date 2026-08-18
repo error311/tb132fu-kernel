@@ -12,6 +12,13 @@
 /* Lenovo's TB132FU uses the external BQ27541 as its authoritative gauge. */
 #define MTK_ENABLE_BQ27541
 
+/*
+ * DLPT reads UI SOC from a syscore suspend callback, after sleeping I/O is no
+ * longer permitted.  Keep the last value obtained in normal process context
+ * so the suspend path never has to reach the BQ27541 over I2C.
+ */
+static int tb132fu_cached_uisoc = 50;
+
 static int tb132fu_bq27541_get_property(enum power_supply_property psp,
 	union power_supply_propval *value)
 {
@@ -191,14 +198,24 @@ signed int battery_get_uisoc(void)
 	if (!ret) {
 		pr_info("%s:get bq_psy success, ui_soc(%d)\n",
 			__func__, value.intval);
+		if (value.intval >= 0 && value.intval <= 100)
+			WRITE_ONCE(tb132fu_cached_uisoc, value.intval);
 		return value.intval;
 	}
 #endif
 
-	if (gm != NULL)
+	if (gm != NULL) {
+		if (gm->ui_soc >= 0 && gm->ui_soc <= 100)
+			WRITE_ONCE(tb132fu_cached_uisoc, gm->ui_soc);
 		return gm->ui_soc;
+	}
 
 	return 50;
+}
+
+signed int battery_get_uisoc_cached(void)
+{
+	return READ_ONCE(tb132fu_cached_uisoc);
 }
 
 signed int battery_get_bat_temperature(void)
