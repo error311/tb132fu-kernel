@@ -379,6 +379,12 @@
 #define CS35L43_AMP_EN_WIDTH			1
 #define CS35L43_BST_EN_DEFAULT			2
 
+/************************************************/
+/* Power Control 3                              */
+/************************************************/
+#define CS35L43_VPBR_EN_MASK			0x00001000
+#define CS35L43_VPBR_EN_SHIFT			12
+
 
 /************************************************/
 /* Hibernation Control                          */
@@ -570,6 +576,28 @@
 #define CS35L43_DCIN_WD_THLD_SHIFT		1
 #define CS35L43_DCIN_WD_EN_MASK			0x00000001
 #define CS35L43_DCIN_WD_EN_SHIFT		0
+
+/************************************************/
+/* VPBR Configuration                           */
+/************************************************/
+#define CS35L43_VPBR_REL_RATE_MASK		0x00E00000
+#define CS35L43_VPBR_REL_RATE_SHIFT		21
+#define CS35L43_VPBR_WAIT_MASK			0x00180000
+#define CS35L43_VPBR_WAIT_SHIFT			19
+#define CS35L43_VPBR_ATK_RATE_MASK		0x00070000
+#define CS35L43_VPBR_ATK_RATE_SHIFT		16
+#define CS35L43_VPBR_ATK_VOL_MASK		0x0000F000
+#define CS35L43_VPBR_ATK_VOL_SHIFT		12
+#define CS35L43_VPBR_MAX_ATT_MASK		0x00000F00
+#define CS35L43_VPBR_MAX_ATT_SHIFT		8
+#define CS35L43_VPBR_THLD1_MASK			0x0000001F
+#define CS35L43_VPBR_THLD1_SHIFT		0
+
+/************************************************/
+/* VBST Configuration                           */
+/************************************************/
+#define CS35L43_BST_IPK_MASK			0x7F
+#define CS35L43_BST_IPK_SHIFT			0
 
 /************************************************/
 /* IRQ1_IRQ1_EINT_1				*/

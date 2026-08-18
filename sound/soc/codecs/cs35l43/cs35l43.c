@@ -284,6 +284,102 @@ static int cs35l43_ultrasonic_mode_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+static int cs35l43_delta_select_get(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = 0;
+
+	return 0;
+}
+
+static int cs35l43_delta_select_put(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component =
+					snd_soc_kcontrol_component(kcontrol);
+	struct cs35l43_private *cs35l43 =
+					snd_soc_component_get_drvdata(component);
+	struct wm_adsp *dsp = &cs35l43->dsp;
+	int ret = 0;
+	int delta = ucontrol->value.integer.value[0];
+	const char *fwf_name;
+	char filename[NAME_MAX];
+	bool hibernate = false;
+
+	if (!delta)
+		return 0;
+
+	if (cs35l43->hibernate_state == CS35L43_HIBERNATE_STANDBY) {
+		hibernate = true;
+		mutex_lock(&cs35l43->hb_lock);
+		ret = cs35l43_exit_hibernate(cs35l43);
+		if (ret)
+			goto out_hibernate;
+	}
+
+	fwf_name = dsp->fwf_name;
+	snprintf(filename, sizeof(filename), "delta-%d", delta);
+	dsp->fwf_name = filename;
+	dev_dbg(cs35l43->dev, "applying %s DSP coefficients\n", filename);
+
+	ret = wm_adsp_load_coeff(dsp);
+	if (ret)
+		dev_err(cs35l43->dev,
+			"failed to apply %s DSP coefficients: %d\n",
+			filename, ret);
+
+	dsp->fwf_name = fwf_name;
+
+out_hibernate:
+	if (hibernate) {
+		mutex_unlock(&cs35l43->hb_lock);
+		queue_delayed_work(cs35l43->wq, &cs35l43->hb_work,
+				   msecs_to_jiffies(cs35l43->hibernate_delay_ms));
+	}
+
+	return ret;
+}
+
+static int cs35l43_reinit_get(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = 0;
+
+	return 0;
+}
+
+static int cs35l43_reinit_put(struct snd_kcontrol *kcontrol,
+			      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component;
+	struct cs35l43_private *cs35l43;
+	int ret = 0;
+
+	component = snd_soc_kcontrol_component(kcontrol);
+	cs35l43 = snd_soc_component_get_drvdata(component);
+
+	if (!ucontrol->value.integer.value[0])
+		return 0;
+
+	mutex_lock(&cs35l43->hb_lock);
+	if (cs35l43->hibernate_state == CS35L43_HIBERNATE_STANDBY) {
+		ret = cs35l43_exit_hibernate(cs35l43);
+		if (!ret)
+			ret = regmap_write(cs35l43->regmap,
+					   CS35L43_DSP_VIRTUAL1_MBOX_1,
+					   CS35L43_MBOX_CMD_AUDIO_REINIT);
+		queue_delayed_work(cs35l43->wq, &cs35l43->hb_work,
+				   msecs_to_jiffies(cs35l43->hibernate_delay_ms));
+	} else {
+		ret = regmap_write(cs35l43->regmap,
+				   CS35L43_DSP_VIRTUAL1_MBOX_1,
+				   CS35L43_MBOX_CMD_AUDIO_REINIT);
+	}
+	mutex_unlock(&cs35l43->hb_lock);
+
+	return ret;
+}
+
 static const struct snd_kcontrol_new cs35l43_aud_controls[] = {
 	SOC_SINGLE("DC Watchdog Enable", CS35L43_ALIVE_DCIN_WD,
 			CS35L43_DCIN_WD_EN_SHIFT, 1, 0),
@@ -298,6 +394,10 @@ static const struct snd_kcontrol_new cs35l43_aud_controls[] = {
 	SOC_SINGLE_TLV("Amp Gain", CS35L43_AMP_GAIN,
 			CS35L43_AMP_GAIN_PCM_SHIFT, 20, 0,
 			amp_gain_tlv),
+	SOC_SINGLE_EXT("Reinit", SND_SOC_NOPM, 0, 1, 0,
+		       cs35l43_reinit_get, cs35l43_reinit_put),
+	SOC_SINGLE_EXT("Delta Select", SND_SOC_NOPM, 0, 10, 0,
+		       cs35l43_delta_select_get, cs35l43_delta_select_put),
 	SOC_ENUM_EXT("Ultrasonic Mode", cs35l43_ultrasonic_mode_enum,
 			cs35l43_ultrasonic_mode_get, cs35l43_ultrasonic_mode_put),
 	WM_ADSP2_PRELOAD_SWITCH("DSP1", 1),
@@ -1504,6 +1604,12 @@ static int cs35l43_irq_gpio_config(struct cs35l43_private *cs35l43)
 
 static int cs35l43_set_pdata(struct cs35l43_private *cs35l43)
 {
+	if (cs35l43->pdata.bst_ipk)
+		regmap_update_bits(cs35l43->regmap, CS35L43_BST_IPK_CTL,
+				   CS35L43_BST_IPK_MASK,
+				   cs35l43->pdata.bst_ipk <<
+				   CS35L43_BST_IPK_SHIFT);
+
 	if (cs35l43->pdata.bst_vctrl)
 		regmap_update_bits(cs35l43->regmap, CS35L43_VBST_CTL_1,
 				CS35L43_BST_CTL_MASK, cs35l43->pdata.bst_vctrl);
@@ -1580,6 +1686,41 @@ static int cs35l43_set_pdata(struct cs35l43_private *cs35l43)
 				cs35l43->pdata.hw_ng_delay <<
 				CS35L43_NG_DELAY_SHIFT);
 
+	if (cs35l43->pdata.vpbr_rel_rate)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_REL_RATE_MASK,
+				   cs35l43->pdata.vpbr_rel_rate <<
+				   CS35L43_VPBR_REL_RATE_SHIFT);
+	if (cs35l43->pdata.vpbr_wait)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_WAIT_MASK,
+				   cs35l43->pdata.vpbr_wait <<
+				   CS35L43_VPBR_WAIT_SHIFT);
+	if (cs35l43->pdata.vpbr_atk_rate)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_ATK_RATE_MASK,
+				   cs35l43->pdata.vpbr_atk_rate <<
+				   CS35L43_VPBR_ATK_RATE_SHIFT);
+	if (cs35l43->pdata.vpbr_atk_vol)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_ATK_VOL_MASK,
+				   cs35l43->pdata.vpbr_atk_vol <<
+				   CS35L43_VPBR_ATK_VOL_SHIFT);
+	if (cs35l43->pdata.vpbr_max_att)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_MAX_ATT_MASK,
+				   cs35l43->pdata.vpbr_max_att <<
+				   CS35L43_VPBR_MAX_ATT_SHIFT);
+	if (cs35l43->pdata.vpbr_thld)
+		regmap_update_bits(cs35l43->regmap, CS35L43_VPBR_CONFIG,
+				   CS35L43_VPBR_THLD1_MASK,
+				   cs35l43->pdata.vpbr_thld <<
+				   CS35L43_VPBR_THLD1_SHIFT);
+	if (cs35l43->pdata.vpbr_enable)
+		regmap_update_bits(cs35l43->regmap, CS35L43_BLOCK_ENABLES2,
+				   CS35L43_VPBR_EN_MASK,
+				   CS35L43_VPBR_EN_MASK);
+
 	return 0;
 }
 
@@ -1618,6 +1759,20 @@ static int cs35l43_handle_of_data(struct device *dev,
 	pdata->gpio2_out_enable = of_property_read_bool(np,
 					"cirrus,gpio2-output-enable");
 
+	pdata->vpbr_enable = of_property_read_bool(np, "cirrus,vpbr-enable");
+	if (of_property_read_u32(np, "cirrus,vpbr-rel-rate", &val) >= 0)
+		pdata->vpbr_rel_rate = val | CS35L43_VALID_PDATA;
+	if (of_property_read_u32(np, "cirrus,vpbr-wait", &val) >= 0)
+		pdata->vpbr_wait = val | CS35L43_VALID_PDATA;
+	if (of_property_read_u32(np, "cirrus,vpbr-atk-rate", &val) >= 0)
+		pdata->vpbr_atk_rate = val | CS35L43_VALID_PDATA;
+	if (of_property_read_u32(np, "cirrus,vpbr-atk-vol", &val) >= 0)
+		pdata->vpbr_atk_vol = val | CS35L43_VALID_PDATA;
+	if (of_property_read_u32(np, "cirrus,vpbr-max-att", &val) >= 0)
+		pdata->vpbr_max_att = val | CS35L43_VALID_PDATA;
+	if (of_property_read_u32(np, "cirrus,vpbr-thld", &val) >= 0)
+		pdata->vpbr_thld = val | CS35L43_VALID_PDATA;
+
 	if (of_property_read_u32(np, "cirrus,asp-sdout-hiz", &val) >= 0)
 		pdata->asp_sdout_hiz = val | CS35L43_VALID_PDATA;
 
@@ -1632,6 +1787,20 @@ static int cs35l43_handle_of_data(struct device *dev,
 		}
 		pdata->bst_vctrl = ((val - 2550) / 100) + 1;
 	}
+
+	ret = of_property_read_u32(np, "cirrus,boost-peak-milliamp", &val);
+	if (ret >= 0) {
+		if (val < 1600 || val > 4500) {
+			dev_err(dev, "Invalid boost peak current %d mA\n", val);
+			return -EINVAL;
+		}
+		pdata->bst_ipk = ((val - 1600) / 50) + 0x10;
+	}
+
+	ret = of_property_read_string(np, "cirrus,dsp-part-name",
+				      &pdata->dsp_part_name);
+	if (ret < 0)
+		pdata->dsp_part_name = "cs35l43";
 
 	return 0;
 }
@@ -1670,7 +1839,7 @@ static int cs35l43_dsp_init(struct cs35l43_private *cs35l43)
 	int ret;
 
 	dsp = &cs35l43->dsp;
-	dsp->part = "cs35l43";
+	dsp->part = cs35l43->pdata.dsp_part_name ?: "cs35l43";
 	dsp->num = 1;
 	dsp->type = WMFW_HALO;
 	dsp->rev = 0;

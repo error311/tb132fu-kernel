@@ -2837,7 +2837,7 @@ out:
 	return ret;
 }
 
-static int wm_adsp_load_coeff(struct wm_adsp *dsp)
+int wm_adsp_load_coeff(struct wm_adsp *dsp)
 {
 	LIST_HEAD(buf_list);
 	struct regmap *regmap = dsp->regmap;
@@ -3030,6 +3030,7 @@ out:
 	kfree(file);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(wm_adsp_load_coeff);
 
 static int wm_adsp_create_name(struct wm_adsp *dsp)
 {

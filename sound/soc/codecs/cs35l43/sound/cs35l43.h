@@ -26,6 +26,7 @@ struct cs35l43_platform_data {
 	bool gpio2_out_enable;
 	bool classh_disable;
 	bool dsp_ng_enable;
+	bool vpbr_enable;
 	int asp_sdout_hiz;
 	int dsp_ng_pcm_thld;
 	int dsp_ng_delay;
@@ -36,6 +37,14 @@ struct cs35l43_platform_data {
 	int hw_ng_thld;
 	int gpio1_src_sel;
 	int gpio2_src_sel;
+	int vpbr_rel_rate;
+	int vpbr_wait;
+	int vpbr_atk_rate;
+	int vpbr_atk_vol;
+	int vpbr_max_att;
+	int vpbr_thld;
+	int bst_ipk;
+	const char *dsp_part_name;
 };
 
 struct cs35l43_pll_sysclk_config {
