@@ -1,16 +1,23 @@
 Lenovo TB132FU kernel
 =====================
 
-This branch is the boot-validated Lenovo TB132FU downstream kernel. The current
-release is Linux 4.19.325-cip135-st19 with the tablet-specific display, touch,
-pen, camera, charging, connectivity, and accessory support retained. See
-``TB132FU.md`` for tested checkpoints, validation coverage, source composition,
-and flashing warnings.
+This branch is the boot-validated Lenovo TB132FU downstream kernel used by
+Pure Pixel 17 R1. It is Linux 4.19.325-cip135-st19 with the tablet-specific
+display, touch, pen, camera, charging, connectivity, suspend, speaker, and
+accessory support retained.
 
-The immutable tested source tag is ``tb132fu-v84-4.19.325-cip135``. Building a
-flashable boot image also requires the matching device tree, ramdisk, external
-connectivity modules, and Android boot-image layout; this repository does not
-claim that a standalone ``Image`` is safely flashable.
+The exact kernel implementation used for Pure Pixel 17 R1 kernel build 13 is
+commit ``5b0f70f39eff047774cf24d61301f92506330113``. Release-source tag
+``tb132fu-purepixel17-r1-k13`` contains that implementation plus the
+reproducible defconfig and publication documentation; the files added after
+the implementation checkpoint do not change kernel behavior.
+
+See ``TB132FU.md`` for validation coverage, lineage, and flashing warnings.
+See ``BUILDING.md`` and ``build-tb132fu.sh`` for the supported source-build
+path. Building a flashable boot image also requires the matching device tree,
+ramdisk, external connectivity modules, Android boot-image layout, and AVB
+metadata. This repository does not claim that a standalone ``Image`` is safely
+flashable.
 
 Linux kernel
 ============
